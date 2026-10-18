@@ -1,0 +1,9 @@
+# 1flowbase instance manager for the DeepSeek Harness Web profile.
+# The Host half owns durable instance state, imported agent-flow models and
+# dynamically mounted MCP clients; the browser half contributes the settings
+# table at Settings -> 1flowbase.
+- insert:
+    - id: 1flowbase
+      name: 1flowbase-dsh-plugin
+      config:
+        stateDir: !!js process.env.DSH_1FLOWBASE_STATE_DIR
