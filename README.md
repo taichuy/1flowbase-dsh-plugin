@@ -119,6 +119,17 @@ npm pack --dry-run
 
 `pnpm run check` 依次执行类型检查、测试、构建和打包检查。
 
+### 发布到 npm
+
+仓库的 `.github/workflows/release.yml` 在推送 `v*` tag 或手动触发时执行检查并发布。首次使用前需要在 GitHub 仓库设置 `NPM_TOKEN` secret（npm Automation token）。
+
+```bash
+pnpm version patch      # 或 minor / major，自动生成 commit 和 tag
+git push origin main --follow-tags
+```
+
+`pnpm version` 生成 tag 后，Actions 会用当前版本号发布到 npm。已经发布过的版本不要重复推 tag。
+
 ## 已知边界
 
 - 应用模型是文本接口：图片和文件会以占位文本发送，不会上传二进制。
