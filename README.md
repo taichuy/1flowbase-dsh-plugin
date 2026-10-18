@@ -2,6 +2,8 @@
 
 DeepSeek Harness Web profile 的 1flowbase 集成插件。它把 1flowbase 实例、Agent Flow 应用模型和 MCP 实例放进同一个设置页表格里管理。
 
+![1flowbase 设置页](https://raw.githubusercontent.com/taichuy/1flowbase-dsh-plugin/main/docs/settings.png)
+
 ## 功能
 
 1. **实例表格**：新建、测试、删除 1flowbase 实例。每个实例保存部署地址和一份长期凭据。
