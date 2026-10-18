@@ -12,8 +12,11 @@ import type {
   CreateInstanceInput,
   ExpirationPolicy,
   FlowbaseInstanceRecord,
+  InstanceCredentialInput,
   InstanceView,
   TestResult,
+  UpdateInstanceInput,
+  UpdateInstanceResult,
 } from './shared/api.js'
 
 const MAX_BODY_BYTES = 256 * 1024
@@ -82,6 +85,12 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
 }
 
+function parseExpirationPolicy(value: unknown): ExpirationPolicy | undefined {
+  return value === '30d' || value === '1y' || value === '3y' || value === 'never'
+    ? value satisfies ExpirationPolicy
+    : undefined
+}
+
 function parseCreate(body: unknown): CreateInstanceInput {
   if (typeof body !== 'object' || body === null) {
     throw new FlowbaseError('request/invalid', '请求体必须是 JSON 对象')
@@ -91,10 +100,7 @@ function parseCreate(body: unknown): CreateInstanceInput {
   if (authMode !== 'api_key' && authMode !== 'login') {
     throw new FlowbaseError('request/invalid', 'authMode 必须是 api_key 或 login')
   }
-  const expiration = raw.expirationPolicy
-  const expirationPolicy = expiration === '30d' || expiration === '1y' || expiration === '3y' || expiration === 'never'
-    ? expiration satisfies ExpirationPolicy
-    : undefined
+  const expirationPolicy = parseExpirationPolicy(raw.expirationPolicy)
   const apiKey = optionalString(raw.apiKey)
   const identifier = optionalString(raw.identifier)
   const password = optionalString(raw.password)
@@ -109,6 +115,45 @@ function parseCreate(body: unknown): CreateInstanceInput {
     ...(roleCode === undefined ? {} : { roleCode }),
     ...(expirationPolicy === undefined ? {} : { expirationPolicy }),
   }
+}
+
+/** One credential replacement; a missing credential keeps the stored token. */
+function parseCredential(value: unknown): InstanceCredentialInput {
+  if (typeof value !== 'object' || value === null) {
+    throw new FlowbaseError('request/invalid', 'credential 必须是 JSON 对象')
+  }
+  const raw = value as Record<string, unknown>
+  if (raw.authMode === 'api_key') {
+    return { authMode: 'api_key', apiKey: requireString(raw.apiKey, 'API Key', 500) }
+  }
+  if (raw.authMode === 'login') {
+    const roleCode = optionalString(raw.roleCode)
+    const expirationPolicy = parseExpirationPolicy(raw.expirationPolicy)
+    return {
+      authMode: 'login',
+      identifier: requireString(raw.identifier, '登录账号', 200),
+      password: requireString(raw.password, '登录密码', 500),
+      ...(roleCode === undefined ? {} : { roleCode }),
+      ...(expirationPolicy === undefined ? {} : { expirationPolicy }),
+    }
+  }
+  throw new FlowbaseError('request/invalid', 'credential.authMode 必须是 api_key 或 login')
+}
+
+/** Partial instance patch; every absent field keeps its stored value. */
+function parseUpdate(body: unknown): UpdateInstanceInput {
+  if (typeof body !== 'object' || body === null) {
+    throw new FlowbaseError('request/invalid', '请求体必须是 JSON 对象')
+  }
+  const raw = body as Record<string, unknown>
+  const patch: UpdateInstanceInput = {}
+  if (raw.name !== undefined) patch.name = requireString(raw.name, '实例名称', 80)
+  if (raw.baseUrl !== undefined) patch.baseUrl = normalizeBaseUrl(requireString(raw.baseUrl, '1flowbase 地址', 500))
+  if (raw.credential !== undefined) patch.credential = parseCredential(raw.credential)
+  if (patch.name === undefined && patch.baseUrl === undefined && patch.credential === undefined) {
+    throw new FlowbaseError('request/invalid', '没有需要更新的字段')
+  }
+  return patch
 }
 
 function registerRoutes(deps: HttpDependencies): Route[] {
@@ -158,6 +203,82 @@ function registerRoutes(deps: HttpDependencies): Route[] {
           draft.instances.push(record)
         })
         return view(record)
+      },
+    },
+    {
+      method: 'POST',
+      pattern: /^\/instances\/([^/]+)\/update$/u,
+      handler: async ({ params, body }): Promise<UpdateInstanceResult> => {
+        const id = decodeURIComponent(params[0] ?? '')
+        const current = store.require(id)
+        const patch = parseUpdate(body)
+
+        // Resolve the candidate record first, so a rejected credential or an
+        // unreachable address never reaches durable state.
+        const next: FlowbaseInstanceRecord = {
+          ...current,
+          name: patch.name ?? current.name,
+          baseUrl: patch.baseUrl ?? current.baseUrl,
+        }
+        const credential = patch.credential
+        if (credential !== undefined) {
+          if (credential.authMode === 'api_key') {
+            next.authMode = 'api_key'
+            next.token = credential.apiKey
+            next.workspaceId = null
+            next.loginIdentifier = null
+          } else {
+            const login = await loginAndCreateToken({
+              baseUrl: next.baseUrl,
+              identifier: credential.identifier,
+              password: credential.password,
+              ...credential.roleCode === undefined ? {} : { roleCode: credential.roleCode },
+              ...credential.expirationPolicy === undefined ? {} : { expirationPolicy: credential.expirationPolicy },
+              timeoutMs,
+            })
+            next.authMode = 'login'
+            next.token = login.token
+            next.workspaceId = login.workspaceId
+            next.loginIdentifier = credential.identifier
+          }
+        }
+
+        const addressChanged = next.baseUrl !== current.baseUrl
+        const credentialChanged = credential !== undefined
+        if (addressChanged || credentialChanged) {
+          await new FlowbaseClient({ baseUrl: next.baseUrl, token: next.token, timeoutMs }).test()
+        }
+
+        await store.update(draft => {
+          const target = draft.instances.find(entry => entry.id === id)
+          if (target === undefined) throw new FlowbaseError('instance/not-found', `unknown 1flowbase instance ${id}`)
+          target.name = next.name
+          target.baseUrl = next.baseUrl
+          target.authMode = next.authMode
+          target.token = next.token
+          target.workspaceId = next.workspaceId
+          target.loginIdentifier = next.loginIdentifier
+          target.updatedAt = new Date().toISOString()
+        })
+        models.refresh()
+
+        // Mounted MCP connectors captured the old address and credential, so
+        // they reconnect against the new ones. A failed reconnect is reported
+        // without rolling back the saved instance.
+        const warnings: string[] = []
+        if ((addressChanged || credentialChanged) && current.mcps.length > 0) {
+          for (const mcp of current.mcps) {
+            try {
+              await mcps.disable(id, mcp.mcpInstanceId)
+              await mcps.enable(id, mcp.mcpInstanceId)
+            } catch (error) {
+              warnings.push(
+                `MCP「${mcp.name}」未能用新配置重新连接：${error instanceof Error ? error.message : String(error)}。请在 MCP 标签页重新启用。`,
+              )
+            }
+          }
+        }
+        return { instance: view(store.require(id)), warnings }
       },
     },
     {
@@ -239,6 +360,7 @@ function statusFor(error: FlowbaseError): number {
   if (error.code === 'instance/not-found' || error.code === 'application/not-found' || error.code === 'mcp/not-found' || error.code === 'model/not-found') return 404
   if (error.code.startsWith('auth/')) return 401
   if (error.code === 'mcp/connect-failed') return 502
+  if (error.code === 'network') return 502
   if (error.code === 'request/invalid' || error.code === 'instance/invalid-base-url') return 400
   return 400
 }

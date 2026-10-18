@@ -34,14 +34,20 @@ async function listen(handler: (req: IncomingMessage, res: ServerResponse) => vo
   return `http://127.0.0.1:${String(address.port)}`
 }
 
-async function fixture(): Promise<{
+async function fixture(options: { rejectTokens?: readonly string[] } = {}): Promise<{
   baseUrl: string
   store: StateStore
   plugin: (path: string, init?: RequestInit) => Promise<Response>
   models: ModelRegistry
   mcps: McpRegistry
+  mcpCalls: { enable: string[]; disable: string[] }
 }> {
   const flowbase = await listen((req, res) => {
+    const token = (req.headers.authorization ?? '').replace(/^Bearer /u, '')
+    if (options.rejectTokens?.includes(token) === true) {
+      json(res, 401, { error: { code: 'unauthorized', message: 'bad credential' } })
+      return
+    }
     if (req.url === '/api/console/applications') {
       json(res, 200, { data: [{ id: 'app-1', application_type: 'agent_flow', name: 'Support', description: 'desk' }] })
       return
@@ -71,10 +77,14 @@ async function fixture(): Promise<{
     removeApplication: async () => undefined,
     refresh: () => undefined,
   } as unknown as ModelRegistry
+  const mcpCalls = { enable: [] as string[], disable: [] as string[] }
   const mcps = {
     list: async () => [],
-    enable: async () => ({ instanceId: 'mcp-1', name: 'MCP', description: '', status: 'enabled', enabled: true, serverName: 'MCP_mcp-1', enabledAt: 'now' }),
-    disable: async () => undefined,
+    enable: async (_instanceId: string, mcpInstanceId: string) => {
+      mcpCalls.enable.push(mcpInstanceId)
+      return { instanceId: mcpInstanceId, name: 'MCP', description: '', status: 'enabled', enabled: true, serverName: `MCP_${mcpInstanceId}`, enabledAt: 'now' }
+    },
+    disable: async (_instanceId: string, mcpInstanceId: string) => { mcpCalls.disable.push(mcpInstanceId) },
     removeInstance: async () => undefined,
   } as unknown as McpRegistry
   const handler = createHttpHandler({ store, models, mcps, timeoutMs: 5_000 })
@@ -84,6 +94,7 @@ async function fixture(): Promise<{
     store,
     models,
     mcps,
+    mcpCalls,
     plugin: async (path, init) => await fetch(`${pluginBase}/api/1flowbase${path}`, init),
   }
 }
@@ -150,5 +161,126 @@ describe('plugin HTTP API', () => {
     })
     expect(removed.status).toBe(200)
     expect(store.snapshot().instances).toHaveLength(0)
+  })
+})
+
+function mutation(body: unknown): RequestInit {
+  return {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-1flowbase-request': '1' },
+    body: JSON.stringify(body),
+  }
+}
+
+interface UpdatePayload {
+  ok: boolean
+  data?: {
+    instance: { id: string; name: string; baseUrl: string; authMode: string; workspaceId: string | null; loginIdentifier: string | null }
+    warnings: string[]
+  }
+  error?: { code: string; message: string }
+}
+
+/** Seed one login-mode instance carrying an enabled MCP, bypassing the sign-in flow. */
+async function seedLoginInstance(store: StateStore, baseUrl: string): Promise<string> {
+  const record = store.newInstance({
+    name: 'local',
+    baseUrl,
+    authMode: 'login',
+    token: 'user-secret',
+    workspaceId: 'ws-1',
+    loginIdentifier: 'root',
+  })
+  record.mcps.push({ mcpInstanceId: 'mcp-1', name: 'MCP one', serverName: 'MCP_one_mcp-1', enabledAt: 'then' })
+  await store.update(draft => {
+    draft.instances.push(record)
+  })
+  return record.id
+}
+
+describe('plugin HTTP API: instance updates', () => {
+  it('renames an instance without touching its credential', async () => {
+    const { baseUrl, store, plugin } = await fixture()
+    const id = await seedLoginInstance(store, baseUrl)
+    const revision = store.snapshot().revision
+
+    const response = await plugin(`/instances/${id}/update`, mutation({ name: '  新名字  ' }))
+    expect(response.status).toBe(200)
+    const payload = await response.json() as UpdatePayload
+    expect(payload.data?.instance.name).toBe('新名字')
+    expect(payload.data?.warnings).toEqual([])
+
+    const stored = store.snapshot().instances[0]
+    expect(stored?.token).toBe('user-secret')
+    expect(stored?.authMode).toBe('login')
+    expect(stored?.loginIdentifier).toBe('root')
+    expect(store.snapshot().revision).toBe(revision + 1)
+  })
+
+  it('rotates an API key, drops the login identity, and remounts enabled MCPs', async () => {
+    const { baseUrl, store, plugin, mcpCalls } = await fixture()
+    const id = await seedLoginInstance(store, baseUrl)
+
+    const response = await plugin(`/instances/${id}/update`, mutation({
+      credential: { authMode: 'api_key', apiKey: 'rotated-secret' },
+    }))
+    expect(response.status).toBe(200)
+    const payload = await response.json() as UpdatePayload
+    expect(payload.data?.instance.authMode).toBe('api_key')
+    expect(payload.data?.instance.workspaceId).toBeNull()
+    expect(payload.data?.instance.loginIdentifier).toBeNull()
+    expect(payload.data?.warnings).toEqual([])
+    expect(JSON.stringify(payload)).not.toContain('rotated-secret')
+
+    const stored = store.snapshot().instances[0]
+    expect(stored?.token).toBe('rotated-secret')
+    expect(stored?.workspaceId).toBeNull()
+    expect(mcpCalls.disable).toEqual(['mcp-1'])
+    expect(mcpCalls.enable).toEqual(['mcp-1'])
+  })
+
+  it('verifies a new address and leaves state untouched when it is unreachable', async () => {
+    const { baseUrl, store, plugin, mcpCalls } = await fixture()
+    const id = await seedLoginInstance(store, baseUrl)
+
+    const response = await plugin(`/instances/${id}/update`, mutation({ baseUrl: 'http://127.0.0.1:1' }))
+    expect(response.status).toBe(502)
+    expect(store.snapshot().instances[0]?.baseUrl).toBe(baseUrl)
+    expect(mcpCalls.disable).toEqual([])
+  })
+
+  it('refuses a credential the deployment rejects and keeps the running one', async () => {
+    const { baseUrl, store, plugin, mcpCalls } = await fixture({ rejectTokens: ['bad-key'] })
+    const id = await seedLoginInstance(store, baseUrl)
+
+    const response = await plugin(`/instances/${id}/update`, mutation({
+      credential: { authMode: 'api_key', apiKey: 'bad-key' },
+    }))
+    expect(response.status).toBe(401)
+    expect(store.snapshot().instances[0]?.token).toBe('user-secret')
+    expect(mcpCalls.disable).toEqual([])
+  })
+
+  it('rejects an empty patch and an unknown instance', async () => {
+    const { baseUrl, store, plugin } = await fixture()
+    const id = await seedLoginInstance(store, baseUrl)
+
+    const empty = await plugin(`/instances/${id}/update`, mutation({}))
+    expect(empty.status).toBe(400)
+    expect((await empty.json() as UpdatePayload).error?.code).toBe('request/invalid')
+
+    const missing = await plugin('/instances/does-not-exist/update', mutation({ name: 'x' }))
+    expect(missing.status).toBe(404)
+  })
+
+  it('rejects a login credential without a password', async () => {
+    const { baseUrl, store, plugin } = await fixture()
+    const id = await seedLoginInstance(store, baseUrl)
+
+    const response = await plugin(`/instances/${id}/update`, mutation({
+      credential: { authMode: 'login', identifier: 'root' },
+    }))
+    expect(response.status).toBe(400)
+    expect(store.snapshot().instances[0]?.token).toBe('user-secret')
   })
 })

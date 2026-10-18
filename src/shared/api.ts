@@ -105,6 +105,33 @@ export interface CreateInstanceInput {
   expirationPolicy?: ExpirationPolicy
 }
 
+/** Credential replacement carried by an instance update; omitting it keeps the stored token. */
+export type InstanceCredentialInput =
+  | { authMode: 'api_key'; apiKey: string }
+  | {
+    authMode: 'login'
+    identifier: string
+    password: string
+    roleCode?: string
+    expirationPolicy?: ExpirationPolicy
+  }
+
+/** Every field is optional: an absent field keeps its stored value. */
+export interface UpdateInstanceInput {
+  name?: string
+  baseUrl?: string
+  credential?: InstanceCredentialInput
+}
+
+export interface UpdateInstanceResult {
+  instance: InstanceView
+  /**
+   * Non-fatal follow-up failures, such as an MCP connector that could not be
+   * remounted onto the new address or credential. The instance is saved.
+   */
+  warnings: string[]
+}
+
 export interface TestResult {
   ok: boolean
   message: string

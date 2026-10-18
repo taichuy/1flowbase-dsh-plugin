@@ -1,17 +1,24 @@
 # 1flowbase-dsh-plugin
 
-DeepSeek Harness Web profile 的 1flowbase 集成插件。它把 1flowbase 实例、Agent Flow 应用模型和 MCP 实例放进同一个设置页表格里管理。
+DeepSeek Harness Web profile 的 1flowbase 集成插件。它在设置页里管理 1flowbase 实例，并把 Agent Flow 应用注册成模型、把 MCP 实例挂成连接器工具。
 
-![1flowbase 设置页](https://raw.githubusercontent.com/taichuy/1flowbase-dsh-plugin/main/docs/settings.png)
+设置页分两级：**实例列表** 只回答「我有哪些实例、接入了多少资源」；打开一个实例后进入 **详情视图**，用「模型 / MCP / 连接设置」三个标签管理这一个实例。页面只用 Harness 自带的 UI primitives，因此几何、圆角、焦点和 Escape 行为与设置里的其他页面一致。
+
+![实例列表](https://raw.githubusercontent.com/taichuy/1flowbase-dsh-plugin/main/docs/settings.png)
+
+| 新建实例 | 实例详情 · 模型 | 实例详情 · MCP |
+| --- | --- | --- |
+| ![新建实例](https://raw.githubusercontent.com/taichuy/1flowbase-dsh-plugin/main/docs/create-instance.png) | ![模型](https://raw.githubusercontent.com/taichuy/1flowbase-dsh-plugin/main/docs/detail-models.png) | ![MCP](https://raw.githubusercontent.com/taichuy/1flowbase-dsh-plugin/main/docs/detail-mcps.png) |
 
 ## 功能
 
-1. **实例表格**：新建、测试、删除 1flowbase 实例。每个实例保存部署地址和一份长期凭据。
+1. **实例列表与详情**：新建、测试、删除实例；打开实例后按标签管理它的模型、MCP 和凭据。每个实例保存部署地址和一份长期凭据。
 2. **两种登录方式**
    - **API Key**：直接填写 1flowbase 用户 API Key。
    - **登录授权**：填写账号密码，插件调用 1flowbase 登录接口并自动创建一枚长期用户 API Key。密码不会写入插件状态。
 3. **导入 Agent Flow 应用模型**：列出当前凭据可见的 `agent_flow` 应用；导入时自动创建该应用的 Application API Key，读取应用模型元数据，并注册成 Harness 模型选择器里的一个模型。
-4. **挂载 MCP 实例**：列出当前工作区的 MCP 实例；启用后动态加载 Harness 自带 MCP client，把实例挂成连接器工具。每个实例的命名空间是 `mcp__<name>_<instance_id>__<tool>`，所以不同 MCP 的同名工具不会互相覆盖。AI 通过 `mcp_list` / `mcp_get` / `mcp_call` 自己发现和调用。
+4. **编辑实例与轮换凭据**：改名、迁移地址、替换 API Key 或重新登录授权，都在「连接设置」标签里完成。地址或凭据变更前会先验证；变更后已启用的 MCP 会用新配置重新连接，重新连接失败的连接器以警告列出，实例本身仍然保存。
+5. **挂载 MCP 实例**：列出当前工作区的 MCP 实例；启用后动态加载 Harness 自带 MCP client，把实例挂成连接器工具。每个实例的命名空间是 `mcp__<name>_<instance_id>__<tool>`，所以不同 MCP 的同名工具不会互相覆盖。AI 通过 `mcp_list` / `mcp_get` / `mcp_call` 自己发现和调用。
 
 ## 安装
 
@@ -48,9 +55,31 @@ dsh web
 
 创建时会立即验证凭据：读取应用列表和 MCP catalog。验证失败不会保存实例。
 
+### 打开实例
+
+列表行显示实例名、地址、认证方式和「已接入 N 个模型 · N 个 MCP」；行尾的 `⋯` 菜单提供打开 / 测试 / 删除。点击行进入详情：
+
+| 标签 | 内容 |
+| --- | --- |
+| 模型 | 当前凭据可见的 `agent_flow` 应用；导入过的排在「已导入」分组、其余在「未导入」分组 |
+| MCP | 当前工作区的 MCP 实例，行尾开关即时启用 / 停用 |
+| 连接设置 | 实例名、地址、认证方式与凭据（留空表示保持当前凭据） |
+
+详情页头部的「‹ 实例」返回列表；「测试 / 编辑 / 删除」作用于当前实例。
+
+### 编辑实例与轮换凭据
+
+![连接设置](https://raw.githubusercontent.com/taichuy/1flowbase-dsh-plugin/main/docs/detail-connection.png)
+
+「连接设置」标签对应 `POST /api/1flowbase/instances/:id/update`：
+
+- 只填名称或地址时，凭据保持不变（输入框留空即不修改）。
+- 切换「登录方式」或填入新 API Key / 账号密码时，插件先验证新凭据，再把实例写回状态文件；验证失败时旧配置继续生效。
+- 地址或凭据变更后，已启用的 MCP 会断开并按新配置重连；重连失败的连接器不会回滚实例保存，而是以警告提示到「MCP」标签重新启用。
+
 ### 导入应用模型
 
-在实例详情左栏选择 Agent Flow 应用，点击「导入」。导入过程：
+在实例详情「模型」标签里选择 Agent Flow 应用，点击「导入」。导入过程：
 
 ```text
 1flowbase 应用列表
@@ -64,7 +93,7 @@ dsh web
 
 ### 启用 MCP 实例
 
-在实例详情右栏点击「启用」。插件会：
+在实例详情「MCP」标签里打开开关。插件会：
 
 ```text
 1flowbase MCP catalog
@@ -80,6 +109,7 @@ dsh web
 ## 状态与安全
 
 - 状态文件：`$DSH_HOME/1flowbase-dsh-plugin/state.json`，目录 `0700`，文件 `0600`。可用 `DSH_1FLOWBASE_STATE_DIR` 覆盖目录。
+- 更新实例的接口是 `POST /api/1flowbase/instances/:id/update`；地址或凭据变更前先用新配置跑一次验证，验证失败时状态文件不变。
 - 保存的内容包括用户 API Key、每个导入应用的 Application API Key、实例地址和名称。登录密码不保存。
 - 浏览器端只能看到脱敏后的实例视图；API Key 不会出现在任何 HTTP 响应里。
 - 设置 API 位于 `/api/1flowbase`，与 Harness 同源；写操作要求 `x-1flowbase-request: 1` 请求头，并拒绝跨站 Origin。
@@ -106,8 +136,11 @@ Host 侧文件：
 | `src/adapter.ts` | OpenAI Chat Completions → Harness `StreamChunk` |
 | `src/models.ts` | 应用导入与 provider 注册 |
 | `src/mcp.ts` | MCP client 动态挂载与命名空间 |
-| `src/http.ts` | `/api/1flowbase` 路由与错误映射 |
-| `src/client/` | 设置页表格、创建弹窗、模型/MCP 面板 |
+| `src/http.ts` | `/api/1flowbase` 路由（含实例更新）与错误映射 |
+| `src/client/panel.tsx` | 实例列表、详情视图、标签与行内操作 |
+| `src/client/forms.tsx` | 创建弹窗、删除确认、连接设置表单 |
+| `src/client/copy.ts` | 页面文案（中/英） |
+| `src/client/styles.ts` | 仅保留布局样式；控件样式全部来自 UI primitives |
 
 ## 开发
 
@@ -137,5 +170,7 @@ git push origin main --follow-tags
 - 应用模型是文本接口：图片和文件会以占位文本发送，不会上传二进制。
 - 应用是否支持工具调用取决于 1flowbase 的兼容映射；不支持时请求会自动退化为不带 tools 的调用。
 - 登录授权自动创建的用户 API Key 默认有效期 1 年，可在创建时选择 30 天、1 年、3 年或永久。
-- 删除实例不会撤销 1flowbase 中已创建的 API Key。
+- 删除实例不会撤销 1flowbase 中已创建的 API Key；更换凭据后旧 API Key 同样需要到 1flowbase 后台撤销。
+- 更换地址或凭据后，已启用的 MCP 会重新连接；若某个连接失败，实例仍保存，并在页面上以警告提示到「MCP」标签重新启用。
+- 页面文案跟随浏览器语言（`navigator.language`），不注入 Harness 的语言服务。
 - MCP 动态挂载依赖运行中的 DSH 安装自带 `@deepseek-ai/dsh-mcp-client`；插件会优先从 DSH 安装目录解析，避免复制第二份 MCP 运行时。

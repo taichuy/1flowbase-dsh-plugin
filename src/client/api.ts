@@ -5,6 +5,8 @@ import type {
   InstanceView,
   McpInstanceView,
   TestResult,
+  UpdateInstanceInput,
+  UpdateInstanceResult,
 } from '../shared/api.js'
 
 const PREFIX = '/api/1flowbase'
@@ -31,6 +33,8 @@ async function request<T>(path: string, init: { method?: string; body?: unknown 
 export const flowbaseApi = {
   listInstances: () => request<InstanceView[]>('/instances'),
   createInstance: (input: CreateInstanceInput) => request<InstanceView>('/instances', { method: 'POST', body: input }),
+  updateInstance: (id: string, input: UpdateInstanceInput) =>
+    request<UpdateInstanceResult>(`/instances/${encodeURIComponent(id)}/update`, { method: 'POST', body: input }),
   deleteInstance: (id: string) => request<{ id: string }>(`/instances/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   testInstance: (id: string) => request<TestResult>(`/instances/${encodeURIComponent(id)}/test`, { method: 'POST', body: {} }),
   listApplications: (id: string) => request<ApplicationView[]>(`/instances/${encodeURIComponent(id)}/apps`),
