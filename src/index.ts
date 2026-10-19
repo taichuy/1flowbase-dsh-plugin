@@ -43,6 +43,9 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   )
 
   models.refresh()
+  // The selector is usable before any settings page is opened: imported
+  // catalogues are reconciled in the background, so a restart alone is enough.
+  void models.reconcileAll()
   void mcps.restore()
 
   ctx.effect(() => {

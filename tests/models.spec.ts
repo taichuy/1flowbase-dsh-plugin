@@ -200,6 +200,28 @@ describe('ModelRegistry', () => {
     expect(store.require(id).applications[0]?.models).toHaveLength(2)
   })
 
+  it('reconciles imported catalogues at boot, without opening a settings page', async () => {
+    const { id, store, registry, upstream: flowbase } = await fixture()
+    await registry.importApplication(id, 'app-1')
+    expect(store.require(id).applications[0]?.models).toHaveLength(1)
+
+    flowbase.setCatalogue('key-app-1', [
+      { id: 'claude-opus-5-5', context_window: 256 },
+      { id: 'gemini-3.8-flash', context_window: 256_000 },
+    ])
+    await registry.reconcileAll()
+    expect(store.require(id).applications[0]?.models.map(model => model.id))
+      .toEqual(['claude-opus-5-5', 'gemini-3.8-flash'])
+  })
+
+  it('keeps booting when an instance catalogue cannot be read', async () => {
+    const { id, store, registry, upstream: flowbase } = await fixture()
+    await registry.importApplication(id, 'app-1')
+    flowbase.failCatalogues(true)
+    await expect(registry.reconcileAll()).resolves.toBeUndefined()
+    expect(store.require(id).applications[0]?.models.map(model => model.id)).toEqual(['claude-opus-5-5'])
+  })
+
   it('unregisters the provider when the application is removed', async () => {
     const { id, registry, registrations } = await fixture()
     await registry.importApplication(id, 'app-1')

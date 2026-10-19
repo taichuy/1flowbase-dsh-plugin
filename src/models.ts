@@ -183,6 +183,31 @@ export class ModelRegistry {
   }
 
   /**
+   * Reconcile every imported application's catalogue once, in the background,
+   * so a restart alone brings the model selector up to date — including the
+   * models a migration could not know about. Failures stay per instance.
+   */
+  async reconcileAll(): Promise<void> {
+    for (const instance of this.store.snapshot().instances) {
+      if (instance.applications.length === 0) continue
+      try {
+        const client = new FlowbaseClient({
+          baseUrl: instance.baseUrl,
+          token: instance.token,
+          timeoutMs: this.timeoutMs,
+        })
+        await this.syncCatalogues(instance.id, client, instance.applications)
+      } catch (error) {
+        this.ctx.logger('1flowbase').warn(
+          'cannot reconcile the catalogues of instance %s: %s',
+          instance.name,
+          error instanceof Error ? error.message : String(error),
+        )
+      }
+    }
+  }
+
+  /**
    * Re-read every imported application's catalogue and persist what changed.
    * A catalogue that cannot be read keeps its stored models, so a temporarily
    * unreachable deployment does not drop working providers.

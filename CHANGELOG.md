@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- Reconcile every imported application's catalogue in the background at startup, so restarting is enough to pick up the models a version 1 migration could not know about; previously they only appeared after opening the settings page.
+
 ## 0.3.0
 
 - Fix the model mapping: an imported Agent Flow **application** is now one model provider, and the whole catalogue it publishes through `GET /v1/models` becomes that provider's models. Previously every instance was a single provider and an import exposed only the first catalogue entry — a five-model application showed up as one model.
