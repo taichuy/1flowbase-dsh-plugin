@@ -68,7 +68,11 @@ function InstanceRows({ t, instances, busy, menuId, onMenu, onOpen, onTest, onDe
           <Tag tone="outline">{authLabel(t, instance.authMode)}</Tag>
         </span>
         <span className="fb-row-meta">{instance.baseUrl}</span>
-        <span className="fb-row-summary">{t.summary(instance.models.length, instance.mcps.length)}</span>
+        <span className="fb-row-summary">{t.summary(
+          instance.applications.length,
+          instance.applications.reduce((total, application) => total + application.models.length, 0),
+          instance.mcps.length,
+        )}</span>
       </button>
       <Menu
         open={menuId === instance.id}
@@ -122,8 +126,11 @@ function ApplicationRows({ t, applications, busy, onToggle }: {
               {application.imported ? <Tag tone="success">{t.tagImported}</Tag> : null}
             </span>
             <span className="fb-item-meta">
-              {application.imported && application.importedModel !== null
-                ? `${application.importedModel.wireModel} · ${String(application.importedModel.contextWindow)} ctx`
+              {application.importedApplication !== null
+                ? [
+                  t.applicationModels(application.importedApplication.models.length),
+                  application.importedApplication.models.map(model => model.id).join(' · '),
+                ].join(' · ')
                 : application.description}
             </span>
           </span>
@@ -351,7 +358,7 @@ export function FlowbasePanel() {
   const tabs: readonly [SegmentedTab<Tab>, ...SegmentedTab<Tab>[]] = [
     {
       value: 'models',
-      label: `${t.tabModels} ${String(open?.models.length ?? 0)}/${String(applications.length)}`,
+      label: `${t.tabApplications} ${String(open?.applications.length ?? 0)}/${String(applications.length)}`,
       id: 'fb-tab-models',
       panelId: 'fb-panel-models',
     },

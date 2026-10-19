@@ -54,14 +54,12 @@ function view(instance: FlowbaseInstanceRecord): InstanceView {
     loginIdentifier: instance.loginIdentifier,
     createdAt: instance.createdAt,
     updatedAt: instance.updatedAt,
-    models: instance.models.map(model => ({
-      applicationId: model.applicationId,
-      name: model.name,
-      description: model.description,
-      wireModel: model.wireModel,
-      contextWindow: model.contextWindow,
-      maxTokens: model.maxTokens,
-      importedAt: model.importedAt,
+    applications: instance.applications.map(application => ({
+      applicationId: application.applicationId,
+      name: application.name,
+      description: application.description,
+      models: application.models.map(model => ({ ...model })),
+      importedAt: application.importedAt,
     })),
     mcps: instance.mcps.map(mcp => ({
       mcpInstanceId: mcp.mcpInstanceId,

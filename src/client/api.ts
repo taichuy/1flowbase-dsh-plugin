@@ -2,6 +2,7 @@ import type {
   ApiResponse,
   ApplicationView,
   CreateInstanceInput,
+  ImportedApplicationView,
   InstanceView,
   McpInstanceView,
   TestResult,
@@ -39,7 +40,7 @@ export const flowbaseApi = {
   testInstance: (id: string) => request<TestResult>(`/instances/${encodeURIComponent(id)}/test`, { method: 'POST', body: {} }),
   listApplications: (id: string) => request<ApplicationView[]>(`/instances/${encodeURIComponent(id)}/apps`),
   importApplication: (id: string, applicationId: string) =>
-    request<ApplicationView['importedModel']>(`/instances/${encodeURIComponent(id)}/apps/${encodeURIComponent(applicationId)}`, { method: 'POST', body: {} }),
+    request<ImportedApplicationView>(`/instances/${encodeURIComponent(id)}/apps/${encodeURIComponent(applicationId)}`, { method: 'POST', body: {} }),
   removeApplication: (id: string, applicationId: string) =>
     request<{ removed: true }>(`/instances/${encodeURIComponent(id)}/apps/${encodeURIComponent(applicationId)}`, { method: 'DELETE' }),
   listMcps: (id: string) => request<McpInstanceView[]>(`/instances/${encodeURIComponent(id)}/mcps`),

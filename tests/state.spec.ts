@@ -20,7 +20,7 @@ describe('StateStore', () => {
   it('starts empty, persists an instance atomically, and reloads it', async () => {
     const { store } = await fixture()
     const loaded = await store.load()
-    expect(loaded).toEqual({ version: 1, revision: 0, instances: [] })
+    expect(loaded).toEqual({ version: 2, revision: 0, instances: [] })
 
     const record = store.newInstance({
       name: 'local',
@@ -41,7 +41,7 @@ describe('StateStore', () => {
 
     const mode = (await stat(store.file)).mode & 0o777
     expect(mode).toBe(0o600)
-    expect(JSON.parse(await readFile(store.file, 'utf8'))).toMatchObject({ version: 1, revision: 1 })
+    expect(JSON.parse(await readFile(store.file, 'utf8'))).toMatchObject({ version: 2, revision: 1 })
   })
 
   it('serializes concurrent updates without losing writes', async () => {
@@ -70,6 +70,52 @@ describe('StateStore', () => {
     await writeFile(store.file, '{"version":99}', 'utf8')
     const corrupt = new StateStore(join(root, 'state'))
     await expect(corrupt.load()).rejects.toMatchObject({ code: 'state/invalid' })
+  })
+
+  it('reads a version 1 file as a one-model catalogue and writes version 2 back', async () => {
+    const { root, store } = await fixture()
+    await mkdir(store.directory, { recursive: true })
+    await writeFile(store.file, JSON.stringify({
+      version: 1,
+      revision: 4,
+      instances: [{
+        id: 'i-1',
+        name: 'gateway',
+        baseUrl: 'http://127.0.0.1:7600',
+        authMode: 'api_key',
+        token: 'user-secret',
+        workspaceId: null,
+        loginIdentifier: null,
+        models: [{
+          applicationId: 'app-1',
+          name: '1flowbase',
+          description: 'wrapped models',
+          wireModel: 'claude-opus-5-5',
+          apiKey: 'app-secret',
+          contextWindow: 256,
+          maxTokens: 8192,
+          importedAt: 'then',
+        }],
+        mcps: [],
+        createdAt: 'then',
+        updatedAt: 'then',
+      }],
+    }), 'utf8')
+
+    const state = await store.load()
+    expect(state.version).toBe(2)
+    expect(state.instances[0]?.applications).toEqual([{
+      applicationId: 'app-1',
+      name: '1flowbase',
+      description: 'wrapped models',
+      apiKey: 'app-secret',
+      models: [{ id: 'claude-opus-5-5', name: 'claude-opus-5-5', contextWindow: 256, maxTokens: 8192 }],
+      importedAt: 'then',
+    }])
+
+    await store.update(draft => { draft.instances[0]!.updatedAt = 'now' })
+    const persisted = JSON.parse(await readFile(store.file, 'utf8')) as { version: number }
+    expect(persisted.version).toBe(2)
   })
 
   it('refuses an unknown instance id', async () => {

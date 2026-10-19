@@ -3,7 +3,13 @@ import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promi
 import { dirname, join } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { FlowbaseError } from './errors.js'
-import type { AuthMode, FlowbaseInstanceRecord, PluginState } from './shared/api.js'
+import type {
+  AuthMode,
+  FlowbaseInstanceRecord,
+  ImportedApplication,
+  PluginState,
+  WireModel,
+} from './shared/api.js'
 
 const STATE_FILENAME = 'state.json'
 
@@ -13,7 +19,7 @@ export function defaultStateDir(): string {
 }
 
 function initialState(): PluginState {
-  return { version: 1, revision: 0, instances: [] }
+  return { version: 2, revision: 0, instances: [] }
 }
 
 function text(value: unknown, field: string): string {
@@ -26,7 +32,73 @@ function optionalText(value: unknown, field: string): string | null {
   return text(value, field)
 }
 
-function parseInstance(value: unknown): FlowbaseInstanceRecord {
+function parseWireModels(value: unknown, field: string): WireModel[] {
+  if (!Array.isArray(value)) throw new FlowbaseError('state/invalid', `state field ${field} must be an array`)
+  return value.map((entry, index) => {
+    if (typeof entry !== 'object' || entry === null) {
+      throw new FlowbaseError('state/invalid', `state field ${field}[${String(index)}] must be an object`)
+    }
+    const raw = entry as Record<string, unknown>
+    const name = optionalText(raw.name, `${field}[].name`)
+    const id = text(raw.id, `${field}[].id`)
+    return {
+      id,
+      name: name ?? id,
+      contextWindow: Number(raw.contextWindow),
+      maxTokens: Number(raw.maxTokens),
+    } satisfies WireModel
+  })
+}
+
+/** Applications as version 2 stores them. */
+function parseApplications(value: unknown): ImportedApplication[] {
+  if (!Array.isArray(value)) throw new FlowbaseError('state/invalid', 'state instance applications must be an array')
+  return value.map((entry, index) => {
+    if (typeof entry !== 'object' || entry === null) {
+      throw new FlowbaseError('state/invalid', `state instance applications[${String(index)}] must be an object`)
+    }
+    const raw = entry as Record<string, unknown>
+    return {
+      applicationId: text(raw.applicationId, 'applications.applicationId'),
+      name: text(raw.name, 'applications.name'),
+      description: text(raw.description, 'applications.description'),
+      apiKey: text(raw.apiKey, 'applications.apiKey'),
+      models: parseWireModels(raw.models, `applications[${String(index)}].models`),
+      importedAt: text(raw.importedAt, 'applications.importedAt'),
+    } satisfies ImportedApplication
+  })
+}
+
+/**
+ * Version 1 kept exactly one wire model per import and used the application id
+ * as the model id. Reading it as a one-entry catalogue keeps every existing
+ * instance importable, and the next catalogue read fills in the rest.
+ */
+function migrateLegacyModels(value: unknown): ImportedApplication[] {
+  if (!Array.isArray(value)) throw new FlowbaseError('state/invalid', 'state instance models must be an array')
+  return value.map((entry, index) => {
+    if (typeof entry !== 'object' || entry === null) {
+      throw new FlowbaseError('state/invalid', `state instance models[${String(index)}] must be an object`)
+    }
+    const raw = entry as Record<string, unknown>
+    const wireModel = text(raw.wireModel, 'models.wireModel')
+    return {
+      applicationId: text(raw.applicationId, 'models.applicationId'),
+      name: text(raw.name, 'models.name'),
+      description: text(raw.description, 'models.description'),
+      apiKey: text(raw.apiKey, 'models.apiKey'),
+      models: [{
+        id: wireModel,
+        name: wireModel,
+        contextWindow: Number(raw.contextWindow),
+        maxTokens: Number(raw.maxTokens),
+      }],
+      importedAt: text(raw.importedAt, 'models.importedAt'),
+    } satisfies ImportedApplication
+  })
+}
+
+function parseInstance(value: unknown, version: 1 | 2): FlowbaseInstanceRecord {
   if (typeof value !== 'object' || value === null) {
     throw new FlowbaseError('state/invalid', 'state instance must be an object')
   }
@@ -35,24 +107,7 @@ function parseInstance(value: unknown): FlowbaseInstanceRecord {
   if (authMode !== 'api_key' && authMode !== 'login') {
     throw new FlowbaseError('state/invalid', 'state instance authMode is invalid')
   }
-  const models = Array.isArray(raw.models)
-    ? raw.models.map((entry, index) => {
-      if (typeof entry !== 'object' || entry === null) {
-        throw new FlowbaseError('state/invalid', `state instance models[${String(index)}] must be an object`)
-      }
-      const model = entry as Record<string, unknown>
-      return {
-        applicationId: text(model.applicationId, 'models.applicationId'),
-        name: text(model.name, 'models.name'),
-        description: text(model.description, 'models.description'),
-        wireModel: text(model.wireModel, 'models.wireModel'),
-        apiKey: text(model.apiKey, 'models.apiKey'),
-        contextWindow: Number(model.contextWindow),
-        maxTokens: Number(model.maxTokens),
-        importedAt: text(model.importedAt, 'models.importedAt'),
-      }
-    })
-    : []
+  const applications = version === 2 ? parseApplications(raw.applications) : migrateLegacyModels(raw.models)
   const mcps = Array.isArray(raw.mcps)
     ? raw.mcps.map((entry, index) => {
       if (typeof entry !== 'object' || entry === null) {
@@ -75,7 +130,7 @@ function parseInstance(value: unknown): FlowbaseInstanceRecord {
     token: text(raw.token, 'token'),
     workspaceId: optionalText(raw.workspaceId, 'workspaceId'),
     loginIdentifier: optionalText(raw.loginIdentifier, 'loginIdentifier'),
-    models,
+    applications,
     mcps,
     createdAt: text(raw.createdAt, 'createdAt'),
     updatedAt: text(raw.updatedAt, 'updatedAt'),
@@ -87,18 +142,20 @@ function parseState(value: unknown): PluginState {
     throw new FlowbaseError('state/invalid', 'state must be an object')
   }
   const raw = value as Record<string, unknown>
-  if (raw.version !== 1) throw new FlowbaseError('state/invalid', 'unsupported state version')
+  if (raw.version !== 1 && raw.version !== 2) throw new FlowbaseError('state/invalid', 'unsupported state version')
   if (!Number.isSafeInteger(raw.revision) || (raw.revision as number) < 0) {
     throw new FlowbaseError('state/invalid', 'state revision is invalid')
   }
   if (!Array.isArray(raw.instances)) throw new FlowbaseError('state/invalid', 'state instances must be an array')
-  const instances = raw.instances.map(parseInstance)
+  // Version 1 files are read through the legacy projection and written back as
+  // version 2, so a downgrade is the only way to see the old shape again.
+  const instances = raw.instances.map(entry => parseInstance(entry, raw.version as 1 | 2))
   const ids = new Set<string>()
   for (const instance of instances) {
     if (ids.has(instance.id)) throw new FlowbaseError('state/invalid', `duplicate instance id ${instance.id}`)
     ids.add(instance.id)
   }
-  return { version: 1, revision: raw.revision as number, instances }
+  return { version: 2, revision: raw.revision as number, instances }
 }
 
 /** Atomically persisted instance state; the file is owner-only. */
@@ -173,7 +230,7 @@ export class StateStore {
       token: input.token,
       workspaceId: input.workspaceId,
       loginIdentifier: input.loginIdentifier,
-      models: [],
+      applications: [],
       mcps: [],
       createdAt: now,
       updatedAt: now,

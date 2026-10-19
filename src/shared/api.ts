@@ -4,16 +4,30 @@ export type AuthMode = 'api_key' | 'login'
 
 export type ExpirationPolicy = '30d' | '1y' | '3y' | 'never'
 
-export interface ImportedModel {
+/**
+ * One model an application advertises through its own `/v1/models`. An imported
+ * application is a provider, and these entries are the models under it.
+ */
+export interface WireModel {
+  id: string
+  /** Display name reported by the catalogue; falls back to the model id. */
+  name: string
+  contextWindow: number
+  maxTokens: number
+}
+
+/**
+ * One imported Agent Flow application. It owns its application API key and the
+ * model catalogue it publishes, so the application maps to exactly one DSH
+ * provider and its catalogue entries map to that provider's models.
+ */
+export interface ImportedApplication {
   applicationId: string
   name: string
   description: string
-  /** Model id sent to 1flowbase; the DSH-facing model id is the application id. */
-  wireModel: string
-  /** Per-application API key, created by the Host and never returned to the browser. */
+  /** Application API key; the credential every model below is called with. */
   apiKey: string
-  contextWindow: number
-  maxTokens: number
+  models: WireModel[]
   importedAt: string
 }
 
@@ -34,14 +48,16 @@ export interface FlowbaseInstanceRecord {
   token: string
   workspaceId: string | null
   loginIdentifier: string | null
-  models: ImportedModel[]
+  /** Imported applications; each one is a provider in the model selector. */
+  applications: ImportedApplication[]
   mcps: EnabledMcp[]
   createdAt: string
   updatedAt: string
 }
 
 export interface PluginState {
-  version: 1
+  /** 1 stored one wire model per import; 2 stores the application's catalogue. */
+  version: 2
   revision: number
   instances: FlowbaseInstanceRecord[]
 }
@@ -55,17 +71,22 @@ export interface InstanceView {
   loginIdentifier: string | null
   createdAt: string
   updatedAt: string
-  models: ImportedModelView[]
+  applications: ImportedApplicationView[]
   mcps: EnabledMcpView[]
 }
 
-export interface ImportedModelView {
+export interface WireModelView {
+  id: string
+  name: string
+  contextWindow: number
+  maxTokens: number
+}
+
+export interface ImportedApplicationView {
   applicationId: string
   name: string
   description: string
-  wireModel: string
-  contextWindow: number
-  maxTokens: number
+  models: WireModelView[]
   importedAt: string
 }
 
@@ -81,7 +102,7 @@ export interface ApplicationView {
   name: string
   description: string
   imported: boolean
-  importedModel: ImportedModelView | null
+  importedApplication: ImportedApplicationView | null
 }
 
 export interface McpInstanceView {

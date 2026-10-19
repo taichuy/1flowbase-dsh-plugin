@@ -53,9 +53,9 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   }, '1flowbase: model and MCP lifecycle')
 
   ctx.logger('1flowbase').info(
-    'loaded %d instance(s), %d imported model(s), %d MCP connector(s)',
+    'loaded %d instance(s), %d imported application(s), %d MCP connector(s)',
     store.snapshot().instances.length,
-    store.snapshot().instances.reduce((total, instance) => total + instance.models.length, 0),
+    store.snapshot().instances.reduce((total, instance) => total + instance.applications.length, 0),
     store.snapshot().instances.reduce((total, instance) => total + instance.mcps.length, 0),
   )
 }

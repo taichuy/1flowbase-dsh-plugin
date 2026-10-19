@@ -127,13 +127,14 @@ function instanceFixture(): InstanceView {
     loginIdentifier: null,
     createdAt: 'then',
     updatedAt: 'then',
-    models: [{
+    applications: [{
       applicationId: 'app-1',
       name: 'any',
       description: '',
-      wireModel: 'claude-opus-4-8',
-      contextWindow: 10_000,
-      maxTokens: 1_000,
+      models: [
+        { id: 'claude-opus-4-8', name: 'claude-opus-4-8', contextWindow: 200_000, maxTokens: 8_192 },
+        { id: 'gpt-5.6-sol', name: 'gpt-5.6-sol', contextWindow: 256_000, maxTokens: 16_384 },
+      ],
       importedAt: 'then',
     }],
     mcps: [{ mcpInstanceId: 'mcp-1', name: 'Frontstage', serverName: 'frontstage_mcp-1', enabledAt: 'then' }],
@@ -141,14 +142,21 @@ function instanceFixture(): InstanceView {
 }
 
 const APPLICATIONS: ApplicationView[] = [
-  { id: 'app-2', name: 'codex', description: '本地 codex 使用的', imported: false, importedModel: null },
+  { id: 'app-2', name: 'codex', description: '本地 codex 使用的', imported: false, importedApplication: null },
   {
     id: 'app-1',
     name: 'any',
     description: '',
     imported: true,
-    importedModel: {
-      applicationId: 'app-1', name: 'any', description: '', wireModel: 'claude-opus-4-8', contextWindow: 10_000, maxTokens: 1_000, importedAt: 'then',
+    importedApplication: {
+      applicationId: 'app-1',
+      name: 'any',
+      description: '',
+      models: [
+        { id: 'claude-opus-4-8', name: 'claude-opus-4-8', contextWindow: 200_000, maxTokens: 8_192 },
+        { id: 'gpt-5.6-sol', name: 'gpt-5.6-sol', contextWindow: 256_000, maxTokens: 16_384 },
+      ],
+      importedAt: 'then',
     },
   },
 ]
@@ -179,14 +187,14 @@ async function renderPanel(): Promise<void> {
 
 async function openDetail(): Promise<void> {
   fireEvent.click(screen.getByRole('button', { name: 'Open instance local-e2e' }))
-  await screen.findByRole('tab', { name: /Models/ })
+  await screen.findByRole('tab', { name: /Apps/ })
 }
 
 describe('1flowbase settings panel', () => {
   it('lists instances with their connected totals and drills into one instance', async () => {
     stubFetch(pluginRoutes())
     await renderPanel()
-    expect(screen.getByText('1 model(s) · 1 MCP connector(s)')).toBeTruthy()
+    expect(screen.getByText('1 app(s) · 2 model(s) · 1 MCP connector(s)')).toBeTruthy()
 
     await openDetail()
     expect(screen.getByText('http://127.0.0.1:7800 · API Key')).toBeTruthy()
@@ -195,6 +203,8 @@ describe('1flowbase settings panel', () => {
     expect(screen.getByText('1 available')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Remove' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Import' })).toBeTruthy()
+    // The imported application lists the whole catalogue it publishes.
+    expect(screen.getByText('2 model(s) · claude-opus-4-8 · gpt-5.6-sol')).toBeTruthy()
   })
 
   it('returns to the list from the detail view', async () => {

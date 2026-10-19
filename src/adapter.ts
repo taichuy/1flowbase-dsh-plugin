@@ -17,14 +17,17 @@ import type {
 import type { ImageAttachmentRef, ImageRequestTarget } from '@deepseek-ai/dsh-attachment'
 import { FlowbaseError } from './errors.js'
 
-/** One imported application as the adapter needs it for a request. */
+/** One model of one imported application, as the adapter needs it for a request. */
 export interface AdapterModel {
   provider: string
   applicationId: string
+  /** The application's own name; the provider group label in the model selector. */
+  applicationName: string
   name: string
   description: string
   baseUrl: string
   applicationKey: string
+  /** Model id sent to the application; also the DSH-facing model id. */
   wireModel: string
   contextWindow: number
   maxTokens: number
@@ -236,23 +239,23 @@ export class FlowbaseLlmAdapter {
     if (entry === undefined) return Promise.resolve([])
     return Promise.resolve([...entry.models.values()].map(model => ({
       provider,
-      id: model.applicationId,
+      id: model.wireModel,
       name: model.name,
       description: model.description,
     })))
   }
 
-  resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
+  async resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
     const entry = this.snapshot().providers.get(provider)?.models.get(model)
     if (entry === undefined) throw new FlowbaseError('model/not-found', `unknown imported model ${provider}/${model}`)
-    return Promise.resolve({
+    return {
       provider,
       id: model,
       name: entry.name,
       description: entry.description,
       context: { contextWindow: entry.contextWindow },
       defaultMaxTokens: entry.maxTokens,
-    })
+    }
   }
 
   async *stream(options: GenerateOptions): AsyncGenerator<StreamChunk> {

@@ -2,13 +2,17 @@
 
 DeepSeek Harness Web profile 的 1flowbase 集成插件。它在设置页里管理 1flowbase 实例，并把 Agent Flow 应用注册成模型、把 MCP 实例挂成连接器工具。
 
-设置页分两级：**实例列表** 只回答「我有哪些实例、接入了多少资源」；打开一个实例后进入 **详情视图**，用「模型 / MCP / 连接设置」三个标签管理这一个实例。页面只用 Harness 自带的 UI primitives，因此几何、圆角、焦点和 Escape 行为与设置里的其他页面一致。
+设置页分两级：**实例列表** 只回答「我有哪些实例、接入了多少资源」；打开一个实例后进入 **详情视图**，用「应用 / MCP / 连接设置」三个标签管理这一个实例。页面只用 Harness 自带的 UI primitives，因此几何、圆角、焦点和 Escape 行为与设置里的其他页面一致。
+
+**一个导入的 Agent Flow 应用 = 模型选择器里的一个供应商**，它的 `GET /v1/models` 目录整体成为该供应商下的模型：
+
+![模型选择器](https://raw.githubusercontent.com/taichuy/1flowbase-dsh-plugin/main/docs/model-selector.png)
 
 ![实例列表](https://raw.githubusercontent.com/taichuy/1flowbase-dsh-plugin/main/docs/settings.png)
 
-| 新建实例 | 实例详情 · 模型 | 实例详情 · MCP |
+| 新建实例 | 实例详情 · 应用 | 实例详情 · MCP |
 | --- | --- | --- |
-| ![新建实例](https://raw.githubusercontent.com/taichuy/1flowbase-dsh-plugin/main/docs/create-instance.png) | ![模型](https://raw.githubusercontent.com/taichuy/1flowbase-dsh-plugin/main/docs/detail-models.png) | ![MCP](https://raw.githubusercontent.com/taichuy/1flowbase-dsh-plugin/main/docs/detail-mcps.png) |
+| ![新建实例](https://raw.githubusercontent.com/taichuy/1flowbase-dsh-plugin/main/docs/create-instance.png) | ![应用](https://raw.githubusercontent.com/taichuy/1flowbase-dsh-plugin/main/docs/detail-applications.png) | ![MCP](https://raw.githubusercontent.com/taichuy/1flowbase-dsh-plugin/main/docs/detail-mcps.png) |
 
 ## 功能
 
@@ -16,7 +20,7 @@ DeepSeek Harness Web profile 的 1flowbase 集成插件。它在设置页里管�
 2. **两种登录方式**
    - **API Key**：直接填写 1flowbase 用户 API Key。
    - **登录授权**：填写账号密码，插件调用 1flowbase 登录接口并自动创建一枚长期用户 API Key。密码不会写入插件状态。
-3. **导入 Agent Flow 应用模型**：列出当前凭据可见的 `agent_flow` 应用；导入时自动创建该应用的 Application API Key，读取应用模型元数据，并注册成 Harness 模型选择器里的一个模型。
+3. **导入 Agent Flow 应用为模型供应商**：列出当前凭据可见的 `agent_flow` 应用；导入时自动创建该应用的 Application API Key，读取它发布的 `/v1/models` 目录，并把**整个目录**注册成 Harness 模型选择器里的一个供应商分组（应用名 = 分组名，目录条目 = 分组下的模型）。
 4. **编辑实例与轮换凭据**：改名、迁移地址、替换 API Key 或重新登录授权，都在「连接设置」标签里完成。地址或凭据变更前会先验证；变更后已启用的 MCP 会用新配置重新连接，重新连接失败的连接器以警告列出，实例本身仍然保存。
 5. **挂载 MCP 实例**：列出当前工作区的 MCP 实例；启用后动态加载 Harness 自带 MCP client，把实例挂成连接器工具。每个实例的命名空间是 `mcp__<name>_<instance_id>__<tool>`，所以不同 MCP 的同名工具不会互相覆盖。AI 通过 `mcp_list` / `mcp_get` / `mcp_call` 自己发现和调用。
 
@@ -48,7 +52,7 @@ dsh web
 
 | 字段 | 说明 |
 | --- | --- |
-| 实例名称 | 显示在模型选择器和 MCP 命名空间里 |
+| 实例名称 | 显示在设置页和 MCP 命名空间里（不是模型选择器的分组名；分组名来自应用） |
 | 1flowbase 地址 | 例如 `http://127.0.0.1:7800` 或 `https://1flowbase.example.com`，不要带查询参数 |
 | API Key | 1flowbase 用户 API Key（`/api/console/user-api-keys` 创建的那种） |
 | 登录授权 | 账号 + 密码。插件登录后自动创建用户 API Key，并用它完成后续所有调用 |
@@ -57,11 +61,11 @@ dsh web
 
 ### 打开实例
 
-列表行显示实例名、地址、认证方式和「已接入 N 个模型 · N 个 MCP」；行尾的 `⋯` 菜单提供打开 / 测试 / 删除。点击行进入详情：
+列表行显示实例名、地址、认证方式和「已接入 N 个应用 · N 个模型 · N 个 MCP」；行尾的 `⋯` 菜单提供打开 / 测试 / 删除。点击行进入详情：
 
 | 标签 | 内容 |
 | --- | --- |
-| 模型 | 当前凭据可见的 `agent_flow` 应用；导入过的排在「已导入」分组、其余在「未导入」分组 |
+| 应用 | 当前凭据可见的 `agent_flow` 应用；导入过的排在「已导入」分组并列出它发布的模型 id，其余在「未导入」分组 |
 | MCP | 当前工作区的 MCP 实例，行尾开关即时启用 / 停用 |
 | 连接设置 | 实例名、地址、认证方式与凭据（留空表示保持当前凭据） |
 
@@ -79,17 +83,27 @@ dsh web
 
 ### 导入应用模型
 
-在实例详情「模型」标签里选择 Agent Flow 应用，点击「导入」。导入过程：
+在实例详情「应用」标签里选择 Agent Flow 应用，点击「导入」。映射关系：
 
 ```text
-1flowbase 应用列表
-  -> 创建 Application API Key（明文只在创建时返回）
-  -> GET /v1/models（使用应用 Key）
-  -> 注册 Harness provider + model
-  -> 模型选择器出现「<实例名> / <应用名>」
+1flowbase 实例        -> 地址 + 长期凭据（只是凭据容器，不出现在模型选择器里）
+1flowbase 应用        -> 一个 DSH provider（分组名 = 应用名）
+应用 GET /v1/models   -> 该 provider 下的模型（模型 id = 应用发布的模型 id）
 ```
 
-应用必须已经在 1flowbase 发布 API 并完成模型映射，否则导入会提示 `application/not-published`。移除模型只删除本地注册，不撤销 1flowbase 里的 Application API Key。
+导入过程：
+
+```text
+应用列表（GET /api/console/applications）
+  -> 创建 Application API Key（明文只在创建时返回）
+  -> GET /v1/models（使用应用 Key，取回整份目录）
+  -> 每个目录条目注册为一个模型，各自携带自己的 context window / 输出上限
+  -> 模型选择器出现「<应用名>」分组，下面列出全部模型
+```
+
+应用必须已经在 1flowbase 发布 API 并完成模型映射，否则导入会提示 `application/not-published`；只发布 0 个模型的应用不会被导入成空分组。
+
+打开「应用」标签时会用应用自己的 `/v1/models` 对账一次本地目录：上游加了模型、改了上下文长度都会同步；上游暂时不可达时保留上一次的目录，不丢 provider。移除应用只删除本地注册，不撤销 1flowbase 里的 Application API Key。
 
 ### 启用 MCP 实例
 
@@ -109,6 +123,7 @@ dsh web
 ## 状态与安全
 
 - 状态文件：`$DSH_HOME/1flowbase-dsh-plugin/state.json`，目录 `0700`，文件 `0600`。可用 `DSH_1FLOWBASE_STATE_DIR` 覆盖目录。
+- 状态文件格式为 `version: 2`（每个导入的应用保存整份模型目录）；`version: 1` 的旧文件会被自动读取并迁移，已导入的应用、应用 Key 和实例凭据都不丢，第一次写入时落成 v2。旧格式里只记录了 1 个模型，打开「应用」标签对账后即可补齐其余模型。
 - 更新实例的接口是 `POST /api/1flowbase/instances/:id/update`；地址或凭据变更前先用新配置跑一次验证，验证失败时状态文件不变。
 - 保存的内容包括用户 API Key、每个导入应用的 Application API Key、实例地址和名称。登录密码不保存。
 - 浏览器端只能看到脱敏后的实例视图；API Key 不会出现在任何 HTTP 响应里。
@@ -131,10 +146,10 @@ Host 侧文件：
 | 文件 | 职责 |
 | --- | --- |
 | `src/index.ts` | Cordis 入口、路由注册、生命周期 |
-| `src/state.ts` | 原子状态文件与校验 |
+| `src/state.ts` | 原子状态文件、v1 → v2 状态迁移与校验 |
 | `src/flowbase.ts` | 1flowbase console / app / MCP HTTP 客户端，登录换 API Key |
 | `src/adapter.ts` | OpenAI Chat Completions → Harness `StreamChunk` |
-| `src/models.ts` | 应用导入与 provider 注册 |
+| `src/models.ts` | 应用导入、provider id 派生、应用目录对账与注册 |
 | `src/mcp.ts` | MCP client 动态挂载与命名空间 |
 | `src/http.ts` | `/api/1flowbase` 路由（含实例更新）与错误映射 |
 | `src/client/panel.tsx` | 实例列表、详情视图、标签与行内操作 |
@@ -170,6 +185,8 @@ git push origin main --follow-tags
 - 应用模型是文本接口：图片和文件会以占位文本发送，不会上传二进制。
 - 应用是否支持工具调用取决于 1flowbase 的兼容映射；不支持时请求会自动退化为不带 tools 的调用。
 - 登录授权自动创建的用户 API Key 默认有效期 1 年，可在创建时选择 30 天、1 年、3 年或永久。
+- 模型 id 就是应用 `/v1/models` 里发布的 id（例如 `claude-opus-5-5`），不是应用 id；应用改名只改分组显示名，provider id 由实例 id + 应用 id 派生，因此不会漂移。
+- 应用在 1flowbase 侧下线或目录清空后，该分组会在下一次对账时消失；想立刻生效可以重启 Harness。
 - 删除实例不会撤销 1flowbase 中已创建的 API Key；更换凭据后旧 API Key 同样需要到 1flowbase 后台撤销。
 - 更换地址或凭据后，已启用的 MCP 会重新连接；若某个连接失败，实例仍保存，并在页面上以警告提示到「MCP」标签重新启用。
 - 页面文案跟随浏览器语言（`navigator.language`），不注入 Harness 的语言服务。

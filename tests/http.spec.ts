@@ -9,7 +9,7 @@ import { createHttpHandler } from '../src/http.js'
 import { StateStore } from '../src/state.js'
 import type { ModelRegistry } from '../src/models.js'
 import type { McpRegistry } from '../src/mcp.js'
-import type { ApplicationView } from '../src/shared/api.js'
+import type { ApplicationView, InstanceView } from '../src/shared/api.js'
 
 const servers: ReturnType<typeof createServer>[] = []
 const roots: string[] = []
@@ -72,7 +72,11 @@ async function fixture(options: { rejectTokens?: readonly string[] } = {}): Prom
   const models = {
     listApplications: async () => apps,
     importApplication: async () => ({
-      applicationId: 'app-1', name: 'Support', description: 'desk', wireModel: 'inner', contextWindow: 1, maxTokens: 1, importedAt: 'now',
+      applicationId: 'app-1',
+      name: 'Support',
+      description: 'desk',
+      models: [{ id: 'inner', name: 'inner', contextWindow: 1, maxTokens: 1 }],
+      importedAt: 'now',
     }),
     removeApplication: async () => undefined,
     refresh: () => undefined,
@@ -259,6 +263,34 @@ describe('plugin HTTP API: instance updates', () => {
     expect(response.status).toBe(401)
     expect(store.snapshot().instances[0]?.token).toBe('user-secret')
     expect(mcpCalls.disable).toEqual([])
+  })
+
+  it('projects an imported application with its whole catalogue and no application key', async () => {
+    const { baseUrl, store, plugin } = await fixture()
+    await seedLoginInstance(store, baseUrl)
+    await store.update(draft => {
+      draft.instances[0]?.applications.push({
+        applicationId: 'app-1',
+        name: '1flowbase',
+        description: 'wrapped models',
+        apiKey: 'app-secret',
+        models: [
+          { id: 'claude-opus-5-5', name: 'claude-opus-5-5', contextWindow: 256, maxTokens: 8_192 },
+          { id: 'gpt-5.6-sol', name: 'gpt-5.6-sol', contextWindow: 256_000, maxTokens: 16_384 },
+        ],
+        importedAt: 'then',
+      })
+    })
+
+    const response = await plugin('/instances')
+    const payload = await response.json() as { data: InstanceView[] }
+    const instance = payload.data[0]
+    expect(instance?.applications[0]?.name).toBe('1flowbase')
+    expect(instance?.applications[0]?.models.map(model => model.id)).toEqual(['claude-opus-5-5', 'gpt-5.6-sol'])
+    expect(instance?.applications[0]?.models[1]?.contextWindow).toBe(256_000)
+    expect(JSON.stringify(payload)).not.toContain('app-secret')
+    // The instance no longer exposes a flat "models" list of applications.
+    expect(instance !== undefined && 'models' in instance).toBe(false)
   })
 
   it('rejects an empty patch and an unknown instance', async () => {

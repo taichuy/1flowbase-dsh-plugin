@@ -2,7 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { AdapterRegistrationHandle } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-llm'
 import { FlowbaseClient } from './flowbase.js'
-import type { FlowbaseApplication } from './flowbase.js'
+import type { FlowbaseApplication, FlowbaseAppModel } from './flowbase.js'
 import { FlowbaseError } from './errors.js'
 import type { AdapterModel, AdapterSnapshot } from './adapter.js'
 import { FlowbaseLlmAdapter } from './adapter.js'
@@ -10,27 +10,56 @@ import type { StateStore } from './state.js'
 import type {
   ApplicationView,
   FlowbaseInstanceRecord,
-  ImportedModel,
-  ImportedModelView,
+  ImportedApplication,
+  ImportedApplicationView,
+  WireModel,
 } from './shared/api.js'
 
 const DEFAULT_CONTEXT_WINDOW = 128_000
 const DEFAULT_MAX_TOKENS = 32_768
 
-/** Route id for one instance; stable across restarts and model changes. */
-export function providerIdFor(instanceId: string): string {
-  return `fb_${instanceId.replace(/-/gu, '')}`
+/**
+ * Route id for one imported application. An application publishes its own
+ * catalogue and carries its own key, so it is the provider; the id derives
+ * from the instance and application it came from, never from a renameable
+ * display name.
+ */
+export function providerIdFor(instanceId: string, applicationId: string): string {
+  return `fb_${sanitize(instanceId)}_${sanitize(applicationId)}`
 }
 
-function modelView(model: ImportedModel): ImportedModelView {
+function sanitize(value: string): string {
+  return value.replace(/[^a-zA-Z0-9]/gu, '')
+}
+
+/** Project one application's `/v1/models` catalogue into stored wire models. */
+function wireModelsOf(catalogue: readonly FlowbaseAppModel[]): WireModel[] {
+  return catalogue.map(model => ({
+    id: model.id,
+    name: model.name ?? model.id,
+    contextWindow: positive(model.context_window ?? model.limit?.context, DEFAULT_CONTEXT_WINDOW),
+    maxTokens: positive(model.max_output_tokens ?? model.limit?.output, DEFAULT_MAX_TOKENS),
+  }))
+}
+
+function sameCatalogue(left: readonly WireModel[], right: readonly WireModel[]): boolean {
+  return left.length === right.length && left.every((model, index) => {
+    const other = right[index]
+    return other !== undefined
+      && other.id === model.id
+      && other.name === model.name
+      && other.contextWindow === model.contextWindow
+      && other.maxTokens === model.maxTokens
+  })
+}
+
+function applicationView(application: ImportedApplication): ImportedApplicationView {
   return {
-    applicationId: model.applicationId,
-    name: model.name,
-    description: model.description,
-    wireModel: model.wireModel,
-    contextWindow: model.contextWindow,
-    maxTokens: model.maxTokens,
-    importedAt: model.importedAt,
+    applicationId: application.applicationId,
+    name: application.name,
+    description: application.description,
+    models: application.models.map(model => ({ ...model })),
+    importedAt: application.importedAt,
   }
 }
 
@@ -71,28 +100,32 @@ export class ModelRegistry {
     this.routes = []
   }
 
-  /** List agent-flow applications with their local import state. */
+  /**
+   * List agent-flow applications. Imported applications have their catalogue
+   * read back from the deployment, because the application — not this plugin —
+   * decides which models it exposes.
+   */
   async listApplications(instanceId: string): Promise<ApplicationView[]> {
     const instance = this.store.require(instanceId)
     const client = new FlowbaseClient({ baseUrl: instance.baseUrl, token: instance.token, timeoutMs: this.timeoutMs })
     const applications = await client.listApplications()
-    const imported = new Map(instance.models.map(model => [model.applicationId, model]))
+    const catalogues = await this.syncCatalogues(instanceId, client, instance.applications)
     return applications
       .map(application => {
-        const model = imported.get(application.id)
+        const importedApplication = catalogues.get(application.id)
         return {
           id: application.id,
           name: application.name,
           description: application.description,
-          imported: model !== undefined,
-          importedModel: model === undefined ? null : modelView(model),
+          imported: importedApplication !== undefined,
+          importedApplication: importedApplication === undefined ? null : applicationView(importedApplication),
         } satisfies ApplicationView
       })
       .sort((left, right) => left.name.localeCompare(right.name))
   }
 
-  /** Import one published agent-flow application as a DSH model. */
-  async importApplication(instanceId: string, applicationId: string): Promise<ImportedModelView> {
+  /** Import one published agent-flow application as a DSH provider. */
+  async importApplication(instanceId: string, applicationId: string): Promise<ImportedApplicationView> {
     const instance = this.store.require(instanceId)
     const client = new FlowbaseClient({ baseUrl: instance.baseUrl, token: instance.token, timeoutMs: this.timeoutMs })
     const applications = await client.listApplications()
@@ -100,86 +133,125 @@ export class ModelRegistry {
     if (application === undefined) {
       throw new FlowbaseError('application/not-found', `1flowbase 中没有可访问的 agent-flow 应用 ${applicationId}`)
     }
-    const existingModel = instance.models.find(model => model.applicationId === applicationId)
-    let applicationKey = existingModel?.apiKey
-    let models: Awaited<ReturnType<typeof client.listApplicationModels>> | undefined
-    if (applicationKey !== undefined) {
+    const existing = instance.applications.find(entry => entry.applicationId === applicationId)
+    let apiKey = existing?.apiKey
+    let models: WireModel[] | undefined
+    if (apiKey !== undefined) {
       try {
-        models = await client.listApplicationModels(applicationKey)
+        models = wireModelsOf(await client.listApplicationModels(apiKey))
       } catch {
-        applicationKey = undefined
+        apiKey = undefined
       }
     }
-    if (applicationKey === undefined || models === undefined) {
-      applicationKey = await client.createApplicationKey(applicationId, `DeepSeek Harness - ${instance.name}`)
-      models = await client.listApplicationModels(applicationKey)
+    if (apiKey === undefined || models === undefined) {
+      apiKey = await client.createApplicationKey(applicationId, `DeepSeek Harness - ${instance.name}`)
+      models = wireModelsOf(await client.listApplicationModels(apiKey))
     }
-    const wire = models[0]
-    if (wire === undefined) {
+    if (models.length === 0) {
       throw new FlowbaseError(
         'application/not-published',
         `应用「${application.name}」没有可用模型。请先在 1flowbase 发布应用 API 并完成模型映射。`,
       )
     }
-    const contextWindow = positive(wire.context_window ?? wire.limit?.context, DEFAULT_CONTEXT_WINDOW)
-    const maxTokens = positive(wire.max_output_tokens ?? wire.limit?.output, DEFAULT_MAX_TOKENS)
-    const record: ImportedModel = {
+    const record: ImportedApplication = {
       applicationId,
       name: application.name,
       description: application.description,
-      wireModel: wire.id,
-      apiKey: applicationKey,
-      contextWindow,
-      maxTokens,
+      apiKey,
+      models,
       importedAt: new Date().toISOString(),
     }
     await this.store.update(draft => {
       const target = requireInDraft(draft.instances, instanceId)
-      const existing = target.models.findIndex(model => model.applicationId === applicationId)
-      if (existing >= 0) target.models[existing] = record
-      else target.models.push(record)
+      const index = target.applications.findIndex(entry => entry.applicationId === applicationId)
+      if (index >= 0) target.applications[index] = record
+      else target.applications.push(record)
       target.updatedAt = new Date().toISOString()
     })
     this.refresh()
-    return modelView(record)
+    return applicationView(record)
   }
 
   /** Remove one imported application; its app key stays valid until revoked in 1flowbase. */
   async removeApplication(instanceId: string, applicationId: string): Promise<void> {
     await this.store.update(draft => {
       const target = requireInDraft(draft.instances, instanceId)
-      target.models = target.models.filter(model => model.applicationId !== applicationId)
+      target.applications = target.applications.filter(entry => entry.applicationId !== applicationId)
       target.updatedAt = new Date().toISOString()
     })
     this.refresh()
+  }
+
+  /**
+   * Re-read every imported application's catalogue and persist what changed.
+   * A catalogue that cannot be read keeps its stored models, so a temporarily
+   * unreachable deployment does not drop working providers.
+   * @returns the effective applications, keyed by application id.
+   */
+  private async syncCatalogues(
+    instanceId: string,
+    client: FlowbaseClient,
+    applications: readonly ImportedApplication[],
+  ): Promise<Map<string, ImportedApplication>> {
+    const effective = new Map<string, ImportedApplication>()
+    const changed: ImportedApplication[] = []
+    for (const application of applications) {
+      let models = application.models
+      try {
+        models = wireModelsOf(await client.listApplicationModels(application.apiKey))
+      } catch {
+        models = application.models
+      }
+      const next = { ...application, models }
+      effective.set(application.applicationId, next)
+      if (!sameCatalogue(application.models, models)) changed.push(next)
+    }
+    if (changed.length > 0) {
+      await this.store.update(draft => {
+        const target = requireInDraft(draft.instances, instanceId)
+        for (const application of changed) {
+          const index = target.applications.findIndex(entry => entry.applicationId === application.applicationId)
+          if (index >= 0) target.applications[index] = application
+        }
+        target.updatedAt = new Date().toISOString()
+      })
+      this.refresh()
+    }
+    return effective
   }
 
   /** Snapshot used by the adapter on each request; no network I/O. */
   private snapshot(): AdapterSnapshot {
     const providers = new Map<string, { name: string; models: Map<string, AdapterModel> }>()
     for (const instance of this.store.snapshot().instances) {
-      const models = new Map<string, AdapterModel>()
-      for (const model of instance.models) {
-        models.set(model.applicationId, {
-          provider: providerIdFor(instance.id),
-          applicationId: model.applicationId,
-          name: model.name,
-          description: model.description,
-          baseUrl: instance.baseUrl,
-          applicationKey: model.apiKey,
-          wireModel: model.wireModel,
-          contextWindow: model.contextWindow,
-          maxTokens: model.maxTokens,
-        })
+      for (const application of instance.applications) {
+        if (application.models.length === 0) continue
+        const provider = providerIdFor(instance.id, application.applicationId)
+        const models = new Map<string, AdapterModel>()
+        for (const model of application.models) {
+          models.set(model.id, {
+            provider,
+            applicationId: application.applicationId,
+            applicationName: application.name,
+            name: model.name,
+            description: application.description,
+            baseUrl: instance.baseUrl,
+            applicationKey: application.apiKey,
+            wireModel: model.id,
+            contextWindow: model.contextWindow,
+            maxTokens: model.maxTokens,
+          })
+        }
+        // The application is the provider, so its own name is the group label.
+        providers.set(provider, { name: application.name, models })
       }
-      if (models.size > 0) providers.set(providerIdFor(instance.id), { name: instance.name, models })
     }
     return { providers }
   }
 }
 
-function positive(value: number | undefined, fallback: number): number {
-  return value !== undefined && Number.isFinite(value) && value > 0 ? Math.trunc(value) : fallback
+function positive(value: number | null | undefined, fallback: number): number {
+  return value !== undefined && value !== null && Number.isFinite(value) && value > 0 ? Math.trunc(value) : fallback
 }
 
 function requireInDraft(instances: FlowbaseInstanceRecord[], instanceId: string): FlowbaseInstanceRecord {

@@ -33,11 +33,14 @@ async function startServer(handler: (body: Record<string, unknown>, res: import(
   return `http://127.0.0.1:${String(address.port)}`
 }
 
+const PROVIDER = 'fb_instance1_app1'
+
 function snapshot(baseUrl: string): AdapterSnapshot {
   const entry: AdapterModel = {
-    provider: 'fb_dev',
+    provider: PROVIDER,
     applicationId: 'app-1',
-    name: 'Support flow',
+    applicationName: 'Support',
+    name: 'inner-model',
     description: 'Answers tickets',
     baseUrl,
     applicationKey: 'app-token',
@@ -45,15 +48,16 @@ function snapshot(baseUrl: string): AdapterSnapshot {
     contextWindow: 64_000,
     maxTokens: 8_000,
   }
+  // The application is the provider; its catalogue entries are the model rows.
   return {
-    providers: new Map([['fb_dev', { name: 'Local', models: new Map([['app-1', entry]]) }]]),
+    providers: new Map([[PROVIDER, { name: entry.applicationName, models: new Map([[entry.wireModel, entry]]) }]]),
   }
 }
 
 function options(): GenerateOptions {
   return {
-    provider: 'fb_dev',
-    model: 'app-1',
+    provider: PROVIDER,
+    model: 'inner-model',
     messages: [
       { role: 'system', content: [{ type: 'text', text: 'be brief' }] },
       { role: 'user', content: [{ type: 'text', text: 'hello' }] },
@@ -68,6 +72,22 @@ async function collect(stream: AsyncIterable<StreamChunk>): Promise<StreamChunk[
 }
 
 describe('FlowbaseLlmAdapter', () => {
+  it('exposes the application as the provider and its catalogue as the models', async () => {
+    const adapter = new FlowbaseLlmAdapter(() => snapshot('http://127.0.0.1:1'))
+    expect(adapter.providerInfo(PROVIDER)).toEqual({ id: PROVIDER, name: 'Support' })
+    await expect(adapter.listModels(PROVIDER)).resolves.toEqual([
+      { provider: PROVIDER, id: 'inner-model', name: 'inner-model', description: 'Answers tickets' },
+    ])
+    await expect(adapter.resolveModel(PROVIDER, 'inner-model')).resolves.toMatchObject({
+      provider: PROVIDER,
+      id: 'inner-model',
+      context: { contextWindow: 64_000 },
+      defaultMaxTokens: 8_000,
+    })
+    // The application id is not a model id any more.
+    await expect(adapter.resolveModel(PROVIDER, 'app-1')).rejects.toMatchObject({ code: 'model/not-found' })
+  })
+
   it('projects system, user, assistant tool calls and tool results', () => {
     const converted = toOpenAiMessages({
       provider: 'p',

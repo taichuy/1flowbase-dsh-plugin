@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0
+
+- Fix the model mapping: an imported Agent Flow **application** is now one model provider, and the whole catalogue it publishes through `GET /v1/models` becomes that provider's models. Previously every instance was a single provider and an import exposed only the first catalogue entry — a five-model application showed up as one model.
+- Provider ids now derive from `instance id + application id` and the group label is the application name only, so a rename never moves a route and the instance stays a credential container.
+- Each model carries its own context window and output limit; the model id is the catalogue's model id (for example `claude-opus-5-5`).
+- Reading the application list reconciles each imported application's catalogue with its own `/v1/models`; an unreachable catalogue keeps the stored models instead of dropping the provider.
+- State moves to `version: 2` (`applications[]` with a `models[]` catalogue). `version: 1` files are migrated on read and written back as version 2, so existing instances and credentials survive the upgrade.
+- `resolveModel` now rejects instead of throwing synchronously, matching its Promise-returning contract.
+
 ## 0.2.0
 
 - Rework the settings page into two levels: an instance list, then one instance's detail view with 模型 / MCP / 连接设置 tabs, so the list no longer pushes the detail it selects off screen.
