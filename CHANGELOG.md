@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 - Add native `@` references for enabled, mounted MCP instances, with disambiguation across 1flowbase connections and send-time validation.
 - Import and persist published reasoning efforts and defaults, refresh existing imports, notify the model selector on capability changes, and forward the selected `reasoning_effort` to the application.
