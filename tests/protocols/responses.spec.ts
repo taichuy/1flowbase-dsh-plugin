@@ -165,7 +165,10 @@ describe('Responses transport and replay', () => {
       await collect(prepared.stream({ ...prepared.config, ...request }))
       expect(f.requests[0]).toMatchObject({ path: 'WS', authorization: 'Bearer key' })
       const changed = await llm.prepareCall({ provider: 'p', model: 'm' })
-      await expect(collect(changed.stream({ ...changed.config, ...request }))).rejects.toThrow('original application/model')
+      const refused = await collect(changed.stream({ ...changed.config, ...request }))
+      expect(refused).toEqual([{ type: 'finish', reason: { kind: 'error', failure: expect.objectContaining({
+        message: expect.stringContaining('original application/model'),
+      }) } }])
       expect(() => guardForeignCompactRoute({ ...request, provider: 'other' }, false)).toThrow('original application/model')
       expect(f.requests).toHaveLength(1)
     } finally { adapter.dispose(); await ctx.fiber.dispose() }

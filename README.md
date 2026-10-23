@@ -129,6 +129,8 @@ Responses 默认开启远程压缩，使用 `/v1/responses/compact`。应用必�
 
 Choose a protocol in the Import dialog, or use **Edit** on an imported application. The selection applies to every model in that provider and keeps its application key and stable model ids. Existing imports remain on Chat Completions.
 
+Anthropic uses the running DSH host's `@earendil-works/pi-ai`; the tested compatibility baseline is **1.3.0**. The host must expose `normalizeContext` from the package root and `stream` from `@earendil-works/pi-ai/api/anthropic-messages`. The SDK may add `beta=true` to `/v1/messages`. Development dependency pins do not replace or pin the host SDK; revalidate these APIs and thinking-signature replay after upgrading DSH. If the host lacks these exports, use a DSH version with a compatible SDK; the plugin does not bypass package exports to load private modules.
+
 Responses prefers WebSocket. Five total connection failures (including the first attempt), accumulated per live session/provider, switch it to SSE for the rest of that runtime session. Successful connections do not reset the budget. Authentication/protocol rejections, cancellation, and failures after a connection opens are not replayed as connection attempts. Auxiliary title generation uses SSE.
 
 Remote compaction is enabled by default for Responses and requires the application's `/v1/responses/compact` endpoint. Native encrypted output is durably retained and replayed without converting it into a text summary. Failed/cancelled compaction preserves prior history. A conversation containing native compacted context must stay on its original application/model and Responses protocol; start a new conversation to change routes.
