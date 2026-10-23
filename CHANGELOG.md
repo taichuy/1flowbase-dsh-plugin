@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
 - Add application-wide import/edit selection for Chat Completions, Responses and Anthropic Messages.
 - Prefer Responses WebSocket with a five-total-connection-failure, session/provider-scoped SSE fallback.
