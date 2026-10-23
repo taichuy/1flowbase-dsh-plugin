@@ -23,6 +23,7 @@ export interface FlowbaseMcpInstance {
 export interface FlowbaseAppModel {
   id: string
   name?: string
+  reasoning?: unknown
   context_window?: number
   max_output_tokens?: number
   limit?: { context?: number; output?: number }

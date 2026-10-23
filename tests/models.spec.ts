@@ -21,6 +21,7 @@ afterEach(async () => {
 interface CatalogueModel {
   id: string
   name?: string
+  reasoning?: unknown
   context_window?: number
   max_output_tokens?: number
 }
@@ -152,6 +153,49 @@ describe('ModelRegistry', () => {
       { provider, id: 'claude-opus-5-5', name: 'claude-opus-5-5', description: 'wrapped models' },
       { provider, id: 'gpt-5.6-sol', name: 'gpt-5.6-sol', description: 'wrapped models' },
     ])
+  })
+
+  it('imports, persists and refreshes reasoning metadata without changing model ids', async () => {
+    const { id, store, registry, upstream: flowbase, registrations } = await fixture()
+    const reasoning = { supported_efforts: ['low', 'high', 'custom-v2'], default_effort: 'high' }
+    flowbase.setCatalogue('key-app-1', [{ id: 'inner', reasoning }, { id: 'plain' }])
+    const imported = await registry.importApplication(id, 'app-1')
+    expect(imported.models[0]?.reasoning).toEqual(reasoning)
+    expect(imported.models[1]).not.toHaveProperty('reasoning')
+    const reloaded = new StateStore(store.directory)
+    await reloaded.load()
+    expect(reloaded.require(id).applications[0]?.models[0]?.reasoning).toEqual(reasoning)
+    const adapter = registrations.at(-1)!.adapter
+    const provider = providerIdFor(id, 'app-1')
+    const projected = { efforts: reasoning.supported_efforts.map(id => ({ id, name: id })), defaultEffort: 'high' }
+    expect((await adapter.listModels(provider))[0]?.reasoning).toEqual(projected)
+    expect((await adapter.resolveModel(provider, 'inner')).reasoning).toEqual(projected)
+    expect((await adapter.resolveModel(provider, 'plain')).reasoning).toBeUndefined()
+
+    // Only the capability changes: comparison must not ignore it.
+    const changed = { supported_efforts: ['low', 'custom-v2'], default_effort: 'custom-v2' }
+    flowbase.setCatalogue('key-app-1', [{ id: 'inner', reasoning: changed }, { id: 'plain' }])
+    const beforeRefresh = registrations.length
+    await registry.listApplications(id)
+    expect(registrations).toHaveLength(beforeRefresh + 1)
+    expect(store.require(id).applications[0]?.models[0]?.reasoning).toEqual(changed)
+    expect((await adapter.resolveModel(provider, 'inner')).reasoning?.defaultEffort).toBe('custom-v2')
+    flowbase.failCatalogues(true)
+    await registry.reconcileAll()
+    expect(store.require(id).applications[0]?.models[0]?.reasoning).toEqual(changed)
+    flowbase.failCatalogues(false)
+    flowbase.setCatalogue('key-app-1', [{ id: 'inner' }, { id: 'plain' }])
+    await registry.reconcileAll()
+    expect((await adapter.resolveModel(provider, 'inner')).reasoning).toBeUndefined()
+  })
+
+  it('upgrades an existing import with effort metadata on boot reconciliation', async () => {
+    const { id, registry, store, upstream: flowbase } = await fixture()
+    await registry.importApplication(id, 'app-1')
+    const reasoning = { supported_efforts: ['max'] }
+    flowbase.setCatalogue('key-app-1', [{ id: 'claude-opus-5-5', context_window: 256, reasoning }])
+    await registry.reconcileAll()
+    expect(store.require(id).applications[0]?.models[0]?.reasoning).toEqual(reasoning)
   })
 
   it('registers one provider per imported application', async () => {

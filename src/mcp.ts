@@ -7,7 +7,7 @@ import { FlowbaseClient } from './flowbase.js'
 import type { FlowbaseMcpInstance } from './flowbase.js'
 import { FlowbaseError } from './errors.js'
 import type { StateStore } from './state.js'
-import type { EnabledMcp, FlowbaseInstanceRecord, McpInstanceView } from './shared/api.js'
+import type { EnabledMcp, FlowbaseInstanceRecord, McpInstanceView, McpReference } from './shared/api.js'
 
 const MCP_CLIENT_PACKAGE = '@deepseek-ai/dsh-mcp-client'
 
@@ -73,6 +73,19 @@ export class McpRegistry {
         }
       }
     }
+  }
+
+  /** Project committed, mounted connectors for input references without contacting upstream. */
+  references(): McpReference[] {
+    return this.store.snapshot().instances.flatMap(instance => instance.mcps
+      .filter(mcp => this.children.has(keyOf(instance.id, mcp.mcpInstanceId)))
+      .map(mcp => ({
+        instanceId: instance.id,
+        instanceName: instance.name,
+        mcpInstanceId: mcp.mcpInstanceId,
+        name: mcp.name,
+        serverName: mcp.serverName,
+      })))
   }
 
   /** List the workspace MCP instances and their local enabled state. */

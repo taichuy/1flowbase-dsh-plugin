@@ -5,6 +5,7 @@ import type {
   ImportedApplicationView,
   InstanceView,
   McpInstanceView,
+  McpReference,
   TestResult,
   UpdateInstanceInput,
   UpdateInstanceResult,
@@ -12,12 +13,13 @@ import type {
 
 const PREFIX = '/api/1flowbase'
 
-async function request<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
+async function request<T>(path: string, init: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
   const headers: Record<string, string> = { accept: 'application/json' }
   if (init.body !== undefined) headers['content-type'] = 'application/json'
   if (init.method !== undefined && init.method !== 'GET') headers['x-1flowbase-request'] = '1'
   const response = await fetch(`${PREFIX}${path}`, {
     method: init.method ?? 'GET',
+    ...(init.signal === undefined ? {} : { signal: init.signal }),
     headers,
     ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
   })
@@ -32,6 +34,7 @@ async function request<T>(path: string, init: { method?: string; body?: unknown 
 }
 
 export const flowbaseApi = {
+  mcpReferences: (signal: AbortSignal) => request<McpReference[]>('/mcp-references', { signal }),
   listInstances: () => request<InstanceView[]>('/instances'),
   createInstance: (input: CreateInstanceInput) => request<InstanceView>('/instances', { method: 'POST', body: input }),
   updateInstance: (id: string, input: UpdateInstanceInput) =>

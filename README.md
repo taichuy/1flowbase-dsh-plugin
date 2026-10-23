@@ -97,13 +97,15 @@ dsh web
 应用列表（GET /api/console/applications）
   -> 创建 Application API Key（明文只在创建时返回）
   -> GET /v1/models（使用应用 Key，取回整份目录）
-  -> 每个目录条目注册为一个模型，各自携带自己的 context window / 输出上限
+  -> 每个目录条目注册为一个模型，各自携带自己的 context window / 输出上限 / 推理强度
   -> 模型选择器出现「<应用名>」分组，下面列出全部模型
 ```
 
 应用必须已经在 1flowbase 发布 API 并完成模型映射，否则导入会提示 `application/not-published`；只发布 0 个模型的应用不会被导入成空分组。
 
 插件启动时、以及打开「应用」标签时，都会用应用自己的 `/v1/models` 对账本地目录：上游加了模型、改了上下文长度都会同步；上游暂时不可达时保留上一次的目录，不丢 provider。移除应用只删除本地注册，不撤销 1flowbase 里的 Application API Key。
+
+模型目录中的 `reasoning.supported_efforts` 和 `reasoning.default_effort` 会同步到 DSH 原生模型选择器。选中模型后，打开「推理等级 / Effort」选择档位；所选值通过 `reasoning_effort` 原样发送给应用。插件不根据模型名称猜测档位，也不会给未声明推理能力的模型添加选项。已导入应用在重启或重新打开「应用」标签后自动补齐，无需删除重导入。
 
 ### 启用 MCP 实例
 
@@ -119,6 +121,16 @@ dsh web
 ```
 
 启用成功后会立刻出现工具；停用会卸载连接和工具。重启 Harness 后，之前启用的实例会自动恢复。
+
+在对话输入框输入 `@`，可以按 MCP 名称、1flowbase 实例名称或服务命名空间搜索已启用且成功挂载的实例。选择后插入引用标签；同名 MCP 通过所属实例和命名空间区分。发送时引用会解析为明确的 MCP 服务与工具命名空间，提示模型使用该实例，不会绕过工具权限或强制执行工具。
+
+停用或删除后，该实例不再出现在下一次候选查询中。如果草稿中已经有引用，发送时会提示重新启用或移除引用。重启后连接恢复成功才重新提供候选。
+
+### MCP references and reasoning effort (English)
+
+After enabling an MCP instance, type `@` in the conversation composer and search by MCP name, 1flowbase instance name, or server namespace. Picking a result inserts a reference chip. On send, the plugin resolves it against the currently mounted connector and includes the server/tool namespace in the user message. This guides the model; it does not force a tool call or bypass permissions. Disabled, deleted, or unsuccessfully restored connectors are not offered. A stale draft reference blocks sending until it is removed or the connector is enabled again.
+
+Imported models expose the exact `reasoning.supported_efforts` and optional `reasoning.default_effort` published by the application. Use the native model selector's **Effort** menu; the selected id is sent unchanged as `reasoning_effort`. Models without declared reasoning levels keep the provider default and gain no invented options. Existing imports refresh at plugin startup and when the Applications tab is opened, so re-importing is unnecessary.
 
 ## 状态与安全
 
@@ -149,6 +161,8 @@ Host 侧文件：
 | `src/state.ts` | 原子状态文件、v1 → v2 状态迁移与校验 |
 | `src/flowbase.ts` | 1flowbase console / app / MCP HTTP 客户端，登录换 API Key |
 | `src/adapter.ts` | OpenAI Chat Completions → Harness `StreamChunk` |
+| `src/reasoning.ts` | 应用推理能力 JSON 校验与 DSH 元数据投影 |
+| `src/client/mcp-references.ts` | 原生 `@` 候选、引用标签与发送时解析 |
 | `src/models.ts` | 应用导入、provider id 派生、应用目录对账与注册 |
 | `src/mcp.ts` | MCP client 动态挂载与命名空间 |
 | `src/http.ts` | `/api/1flowbase` 路由（含实例更新）与错误映射 |

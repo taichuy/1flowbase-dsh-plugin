@@ -5,6 +5,7 @@ import { FlowbaseClient } from './flowbase.js'
 import type { FlowbaseApplication, FlowbaseAppModel } from './flowbase.js'
 import { FlowbaseError } from './errors.js'
 import type { AdapterModel, AdapterSnapshot } from './adapter.js'
+import { parseReasoning } from './reasoning.js'
 import { FlowbaseLlmAdapter } from './adapter.js'
 import type { StateStore } from './state.js'
 import type {
@@ -39,6 +40,7 @@ function wireModelsOf(catalogue: readonly FlowbaseAppModel[]): WireModel[] {
     name: model.name ?? model.id,
     contextWindow: positive(model.context_window ?? model.limit?.context, DEFAULT_CONTEXT_WINDOW),
     maxTokens: positive(model.max_output_tokens ?? model.limit?.output, DEFAULT_MAX_TOKENS),
+    ...parseReasoning(model.reasoning),
   }))
 }
 
@@ -50,6 +52,7 @@ function sameCatalogue(left: readonly WireModel[], right: readonly WireModel[]):
       && other.name === model.name
       && other.contextWindow === model.contextWindow
       && other.maxTokens === model.maxTokens
+      && JSON.stringify(other.reasoning) === JSON.stringify(model.reasoning)
   })
 }
 
@@ -66,7 +69,6 @@ function applicationView(application: ImportedApplication): ImportedApplicationV
 /** Owns provider registration and the application-import workflow. */
 export class ModelRegistry {
   private handle: AdapterRegistrationHandle | undefined
-  private routes: string[] = []
   private readonly adapter = new FlowbaseLlmAdapter(() => this.snapshot())
   private disposed = false
 
@@ -84,12 +86,10 @@ export class ModelRegistry {
     if (this.handle === undefined) {
       if (routes.length === 0) return
       this.handle = this.ctx.llm.registerAdapter(routes, this.adapter)
-      this.routes = [...routes]
       return
     }
-    if (routes.length === this.routes.length && routes.every((route, index) => route === this.routes[index])) return
+    // Replacing also publishes llm/adapters-updated when only model capabilities changed.
     this.handle.replace(routes)
-    this.routes = [...routes]
   }
 
   /** Release every route; the provider is unregistered from the model selector. */
@@ -97,7 +97,6 @@ export class ModelRegistry {
     this.disposed = true
     this.handle?.()
     this.handle = undefined
-    this.routes = []
   }
 
   /**
@@ -265,6 +264,7 @@ export class ModelRegistry {
             wireModel: model.id,
             contextWindow: model.contextWindow,
             maxTokens: model.maxTokens,
+            ...(model.reasoning === undefined ? {} : { reasoning: model.reasoning }),
           })
         }
         // The application is the provider, so its own name is the group label.

@@ -4,6 +4,12 @@ export type AuthMode = 'api_key' | 'login'
 
 export type ExpirationPolicy = '30d' | '1y' | '3y' | 'never'
 
+/** Published application reasoning capability; effort ids remain provider-owned. */
+export interface ModelReasoning {
+  supported_efforts: string[]
+  default_effort?: string
+}
+
 /**
  * One model an application advertises through its own `/v1/models`. An imported
  * application is a provider, and these entries are the models under it.
@@ -14,6 +20,7 @@ export interface WireModel {
   name: string
   contextWindow: number
   maxTokens: number
+  reasoning?: ModelReasoning
 }
 
 /**
@@ -80,6 +87,7 @@ export interface WireModelView {
   name: string
   contextWindow: number
   maxTokens: number
+  reasoning?: ModelReasoning
 }
 
 export interface ImportedApplicationView {
@@ -174,3 +182,12 @@ export interface ApiFailure {
 }
 
 export type ApiResponse<T> = ApiSuccess<T> | ApiFailure
+
+/** Enabled and mounted connectors only; never includes credentials. */
+export interface McpReference {
+  instanceId: string
+  instanceName: string
+  mcpInstanceId: string
+  name: string
+  serverName: string
+}

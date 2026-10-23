@@ -159,6 +159,11 @@ function registerRoutes(deps: HttpDependencies): Route[] {
   return [
     {
       method: 'GET',
+      pattern: /^\/mcp-references$/u,
+      handler: async () => mcps.references(),
+    },
+    {
+      method: 'GET',
       pattern: /^\/instances$/u,
       handler: async () => store.snapshot().instances.map(view),
     },

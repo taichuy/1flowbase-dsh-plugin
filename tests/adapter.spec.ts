@@ -88,6 +88,20 @@ describe('FlowbaseLlmAdapter', () => {
     await expect(adapter.resolveModel(PROVIDER, 'app-1')).rejects.toMatchObject({ code: 'model/not-found' })
   })
 
+  it('sends the exact selected effort and leaves provider defaults untouched when omitted', async () => {
+    const requests: Record<string, unknown>[] = []
+    const baseUrl = await startServer((body, res) => {
+      requests.push(body)
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] }))
+    })
+    const adapter = new FlowbaseLlmAdapter(() => snapshot(baseUrl))
+    await collect(adapter.stream({ ...options(), reasoningEffort: 'custom-v2' as GenerateOptions['reasoningEffort'] }))
+    await collect(adapter.stream(options()))
+    expect(requests[0]?.reasoning_effort).toBe('custom-v2')
+    expect(requests[1]).not.toHaveProperty('reasoning_effort')
+  })
+
   it('projects system, user, assistant tool calls and tool results', () => {
     const converted = toOpenAiMessages({
       provider: 'p',

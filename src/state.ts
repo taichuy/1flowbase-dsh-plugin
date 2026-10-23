@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
+import { parseReasoning } from './reasoning.js'
 import { FlowbaseError } from './errors.js'
 import type {
   AuthMode,
@@ -46,6 +47,7 @@ function parseWireModels(value: unknown, field: string): WireModel[] {
       name: name ?? id,
       contextWindow: Number(raw.contextWindow),
       maxTokens: Number(raw.maxTokens),
+      ...parseReasoning(raw.reasoning),
     } satisfies WireModel
   })
 }

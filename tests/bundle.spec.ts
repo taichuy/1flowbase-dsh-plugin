@@ -15,6 +15,7 @@ describe('installable dsh bundle', () => {
     expect(manifest.dsh?.bundle?.patch).toBe('./cordis.patch.yml')
     expect(manifest.dsh?.client?.platform).toBe('web')
     expect(manifest.dsh?.client?.inject).toContain('@deepseek-ai/dsh-client-ui-settings')
+    expect(manifest.dsh?.client?.inject).toContain('@deepseek-ai/dsh-client-ui-input-trigger')
     expect(manifest.exports).toHaveProperty('./client')
     expect(manifest.exports).toHaveProperty('./cordis.patch.yml')
     expect(manifest.files).toContain('cordis.patch.yml')

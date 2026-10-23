@@ -15,6 +15,8 @@ import type {
   ToolSchema,
 } from '@deepseek-ai/dsh-llm'
 import type { ImageAttachmentRef, ImageRequestTarget } from '@deepseek-ai/dsh-attachment'
+import { dshReasoning } from './reasoning.js'
+import type { ModelReasoning } from './shared/api.js'
 import { FlowbaseError } from './errors.js'
 
 /** One model of one imported application, as the adapter needs it for a request. */
@@ -31,6 +33,7 @@ export interface AdapterModel {
   wireModel: string
   contextWindow: number
   maxTokens: number
+  reasoning?: ModelReasoning
 }
 
 /** Provider and model view the registry projects into the adapter. */
@@ -242,6 +245,7 @@ export class FlowbaseLlmAdapter {
       id: model.wireModel,
       name: model.name,
       description: model.description,
+      ...dshReasoning(model.reasoning),
     })))
   }
 
@@ -255,6 +259,7 @@ export class FlowbaseLlmAdapter {
       description: entry.description,
       context: { contextWindow: entry.contextWindow },
       defaultMaxTokens: entry.maxTokens,
+      ...dshReasoning(entry.reasoning),
     }
   }
 
@@ -299,6 +304,7 @@ export class FlowbaseLlmAdapter {
       stream_options: { include_usage: true },
     }
     if (tools !== undefined) body.tools = tools
+    if (options.reasoningEffort !== undefined) body.reasoning_effort = options.reasoningEffort
     if (options.temperature !== undefined) body.temperature = options.temperature
     if (options.maxTokens !== undefined) body.max_tokens = options.maxTokens
     if (options.stop !== undefined && options.stop.length > 0) body.stop = options.stop
