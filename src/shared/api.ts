@@ -28,7 +28,14 @@ export interface WireModel {
  * model catalogue it publishes, so the application maps to exactly one DSH
  * provider and its catalogue entries map to that provider's models.
  */
-export interface ImportedApplication {
+export type ApplicationProtocol = 'chat-completions' | 'responses' | 'anthropic-messages'
+
+export interface ApplicationProtocolSettings {
+  protocol: ApplicationProtocol
+  remoteCompaction: boolean
+}
+
+export interface ImportedApplication extends ApplicationProtocolSettings {
   applicationId: string
   name: string
   description: string
@@ -90,7 +97,7 @@ export interface WireModelView {
   reasoning?: ModelReasoning
 }
 
-export interface ImportedApplicationView {
+export interface ImportedApplicationView extends ApplicationProtocolSettings {
   applicationId: string
   name: string
   description: string

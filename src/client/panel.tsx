@@ -15,9 +15,11 @@ import { flowbaseApi } from './api.js'
 import { copyFor, isChinese } from './copy.js'
 import type { Copy } from './copy.js'
 import { ConnectionForm, CreateInstanceDialog, DeleteInstanceDialog } from './forms.js'
+import { ApplicationDialog, protocolLabel } from './application-dialog.js'
 import { STYLES } from './styles.js'
 import type {
   ApplicationView,
+  ApplicationProtocolSettings,
   AuthMode,
   InstanceView,
   McpInstanceView,
@@ -101,11 +103,12 @@ function InstanceRows({ t, instances, busy, menuId, onMenu, onOpen, onTest, onDe
   </ul>
 }
 
-function ApplicationRows({ t, applications, busy, onToggle }: {
+function ApplicationRows({ t, applications, busy, onToggle, onEdit }: {
   t: Copy
   applications: ApplicationView[]
   busy: string | undefined
   onToggle: (application: ApplicationView) => void
+  onEdit: (application: ApplicationView) => void
 }) {
   const imported = applications.filter(application => application.imported)
   const available = applications.filter(application => !application.imported)
@@ -124,6 +127,7 @@ function ApplicationRows({ t, applications, busy, onToggle }: {
             <span className="fb-item-title">
               {application.name}
               {application.imported ? <Tag tone="success">{t.tagImported}</Tag> : null}
+              {application.importedApplication === null ? null : <Tag tone="outline">{protocolLabel(t, application.importedApplication.protocol)}</Tag>}
             </span>
             <span className="fb-item-meta">
               {application.importedApplication !== null
@@ -134,6 +138,10 @@ function ApplicationRows({ t, applications, busy, onToggle }: {
                 : application.description}
             </span>
           </span>
+          {application.imported ? <Button variant="outline" size="sm" disabled={busy !== undefined}
+            aria-label={t.editApplicationAction(application.name)} onClick={() => { onEdit(application) }}>
+            {t.edit}
+          </Button> : null}
           <Button
             variant="outline"
             size="sm"
@@ -191,6 +199,7 @@ export function FlowbasePanel() {
   const [status, setStatus] = useState<Status>()
   const [createOpen, setCreateOpen] = useState(false)
   const [deleteId, setDeleteId] = useState<string>()
+  const [applicationDialog, setApplicationDialog] = useState<ApplicationView>()
   const [menuId, setMenuId] = useState<string>()
 
   const open = instances.find(instance => instance.id === openId)
@@ -315,20 +324,41 @@ export function FlowbasePanel() {
 
   const toggleApplication = async (application: ApplicationView): Promise<void> => {
     if (openId === undefined) return
+    if (!application.imported) {
+      setApplicationDialog(application)
+      return
+    }
     setBusy(`app:${application.id}`)
     setStatus(undefined)
     try {
       if (application.imported) {
         await flowbaseApi.removeApplication(openId, application.id)
         setStatus({ tone: 'ok', text: t.removed(application.name) })
-      } else {
-        await flowbaseApi.importApplication(openId, application.id)
-        setStatus({ tone: 'ok', text: t.imported(application.name) })
       }
       setApplications(await flowbaseApi.listApplications(openId))
       await loadInstances()
     } catch (failure) {
       setStatus({ tone: 'error', text: errorText(failure) })
+    } finally {
+      setBusy(undefined)
+    }
+  }
+
+  const saveApplication = async (application: ApplicationView, settings: ApplicationProtocolSettings): Promise<void> => {
+    if (openId === undefined) return
+    setBusy(`app:${application.id}`)
+    setStatus(undefined)
+    try {
+      const saved = application.imported
+        ? await flowbaseApi.updateApplication(openId, application.id, settings)
+        : await flowbaseApi.importApplication(openId, application.id, settings)
+      setApplications(current => current.map(entry => entry.id === application.id
+        ? { ...entry, imported: true, importedApplication: saved } : entry))
+      setInstances(current => current.map(instance => instance.id === openId
+        ? { ...instance, applications: [...instance.applications.filter(entry => entry.applicationId !== application.id), saved] }
+        : instance))
+      setApplicationDialog(undefined)
+      setStatus({ tone: 'ok', text: application.imported ? t.applicationUpdated(application.name) : t.imported(application.name) })
     } finally {
       setBusy(undefined)
     }
@@ -461,6 +491,7 @@ export function FlowbasePanel() {
               t={t}
               applications={applications}
               busy={busy}
+              onEdit={setApplicationDialog}
               onToggle={application => { void toggleApplication(application) }}
             />}
       </div>
@@ -480,6 +511,13 @@ export function FlowbasePanel() {
         />
       </div>
     </>}
+
+    {applicationDialog === undefined ? null : <ApplicationDialog
+      t={t}
+      application={applicationDialog}
+      onClose={() => { setApplicationDialog(undefined) }}
+      onSave={settings => saveApplication(applicationDialog, settings)}
+    />}
 
     {createOpen ? <CreateInstanceDialog
       t={t}

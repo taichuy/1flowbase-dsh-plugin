@@ -1,6 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-llm'
+import { installRemoteCompaction } from './compaction/presets.js'
+import { assertCompactRoute } from './protocols/compact-block.js'
 import { createHttpHandler } from './http.js'
 import { McpRegistry } from './mcp.js'
 import { ModelRegistry } from './models.js'
@@ -10,7 +12,7 @@ import { defaultStateDir, StateStore } from './state.js'
 export const name = '1flowbase'
 
 /** Services required before the settings API and model routes can mount. */
-export const inject = ['webServer', 'llm']
+export const inject = ['webServer', 'llm', 'loader']
 
 const DEFAULT_TIMEOUT_MS = 20_000
 
@@ -19,6 +21,9 @@ export interface Config {
   /** Durable state directory; defaults to `$DSH_HOME/1flowbase-dsh-plugin`. */
   stateDir?: string
   /** Timeout for one 1flowbase console request. */
+  websocketConnectTimeoutMs?: number
+  streamIdleTimeoutMs?: number
+  websocketRetryDelayMs?: number
   requestTimeoutMs?: number
 }
 
@@ -33,7 +38,19 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   const store = new StateStore(config.stateDir ?? defaultStateDir())
   await store.load()
   const timeoutMs = config.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS
-  const models = new ModelRegistry(ctx, store, timeoutMs)
+  const models = new ModelRegistry(ctx, store, timeoutMs, {
+    connectTimeoutMs: config.websocketConnectTimeoutMs ?? 10_000,
+    idleTimeoutMs: config.streamIdleTimeoutMs ?? 300_000,
+    retryDelayMs: config.websocketRetryDelayMs ?? 250,
+  })
+  installRemoteCompaction(ctx, {
+    resolveRoute: (provider, model) => models.resolveRoute(provider, model),
+    compact: options => models.compact(options),
+  })
+  ctx.on('llm/stream', (options, next) => {
+    assertCompactRoute(options, models.resolveRoute(options.provider, options.model)?.protocol)
+    return next()
+  })
   const mcps = new McpRegistry(ctx, store, timeoutMs)
   const handler = createHttpHandler({ store, models, mcps, timeoutMs })
 

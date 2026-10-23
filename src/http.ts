@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type {} from '@deepseek-ai/dsh-host-webserver'
+import { applicationSettings } from './application-settings.js'
 import { FlowbaseClient, loginAndCreateToken, normalizeBaseUrl } from './flowbase.js'
 import { FlowbaseError, asFlowbaseError } from './errors.js'
 import type { ModelRegistry } from './models.js'
@@ -55,6 +56,8 @@ function view(instance: FlowbaseInstanceRecord): InstanceView {
     createdAt: instance.createdAt,
     updatedAt: instance.updatedAt,
     applications: instance.applications.map(application => ({
+      protocol: application.protocol,
+      remoteCompaction: application.remoteCompaction,
       applicationId: application.applicationId,
       name: application.name,
       description: application.description,
@@ -316,9 +319,17 @@ function registerRoutes(deps: HttpDependencies): Route[] {
     {
       method: 'POST',
       pattern: /^\/instances\/([^/]+)\/apps\/([^/]+)$/u,
-      handler: async ({ params }) => models.importApplication(
+      handler: async ({ params, body }) => models.importApplication(
         decodeURIComponent(params[0] ?? ''),
         decodeURIComponent(params[1] ?? ''),
+        applicationSettings(body),
+      ),
+    },
+    {
+      method: 'POST',
+      pattern: /^\/instances\/([^/]+)\/apps\/([^/]+)\/update$/u,
+      handler: async ({ params, body }) => models.updateApplication(
+        decodeURIComponent(params[0] ?? ''), decodeURIComponent(params[1] ?? ''), applicationSettings(body),
       ),
     },
     {

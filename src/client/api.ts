@@ -1,6 +1,7 @@
 import type {
   ApiResponse,
   ApplicationView,
+  ApplicationProtocolSettings,
   CreateInstanceInput,
   ImportedApplicationView,
   InstanceView,
@@ -42,8 +43,10 @@ export const flowbaseApi = {
   deleteInstance: (id: string) => request<{ id: string }>(`/instances/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   testInstance: (id: string) => request<TestResult>(`/instances/${encodeURIComponent(id)}/test`, { method: 'POST', body: {} }),
   listApplications: (id: string) => request<ApplicationView[]>(`/instances/${encodeURIComponent(id)}/apps`),
-  importApplication: (id: string, applicationId: string) =>
-    request<ImportedApplicationView>(`/instances/${encodeURIComponent(id)}/apps/${encodeURIComponent(applicationId)}`, { method: 'POST', body: {} }),
+  importApplication: (id: string, applicationId: string, settings?: ApplicationProtocolSettings) =>
+    request<ImportedApplicationView>(`/instances/${encodeURIComponent(id)}/apps/${encodeURIComponent(applicationId)}`, { method: 'POST', body: settings ?? {} }),
+  updateApplication: (id: string, applicationId: string, settings: ApplicationProtocolSettings) =>
+    request<ImportedApplicationView>(`/instances/${encodeURIComponent(id)}/apps/${encodeURIComponent(applicationId)}/update`, { method: 'POST', body: settings }),
   removeApplication: (id: string, applicationId: string) =>
     request<{ removed: true }>(`/instances/${encodeURIComponent(id)}/apps/${encodeURIComponent(applicationId)}`, { method: 'DELETE' }),
   listMcps: (id: string) => request<McpInstanceView[]>(`/instances/${encodeURIComponent(id)}/mcps`),

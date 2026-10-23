@@ -107,6 +107,32 @@ dsh web
 
 模型目录中的 `reasoning.supported_efforts` 和 `reasoning.default_effort` 会同步到 DSH 原生模型选择器。选中模型后，打开「推理等级 / Effort」选择档位；所选值通过 `reasoning_effort` 原样发送给应用。插件不根据模型名称猜测档位，也不会给未声明推理能力的模型添加选项。已导入应用在重启或重新打开「应用」标签后自动补齐，无需删除重导入。
 
+### 应用请求协议与远程压缩
+
+点击「导入」时可选择协议；已导入应用行的「编辑」允许统一调整该供应商下所有模型，保留应用密钥、模型标识和目录。旧版本记录默认保持 Chat Completions。
+
+| 协议 | 请求接口 | 传输 |
+| --- | --- | --- |
+| Chat Completions | `/v1/chat/completions` | HTTP / SSE |
+| Responses | `/v1/responses` | WebSocket 优先，连接失败总计 5 次后 SSE |
+| Anthropic Messages | `/v1/messages` | HTTP / SSE |
+
+Responses 的失败预算按运行中的会话和供应商隔离，首次连接计入 5 次；成功连接不清除累计失败次数，降级后该会话/供应商保持 SSE，重启后重新尝试 WebSocket。鉴权或协议拒绝、取消、已经连接后的流中断不会被当成连接失败重放。后台标题生成使用 SSE，不消耗会话连接预算。
+
+Responses 默认开启远程压缩，使用 `/v1/responses/compact`。应用必须支持该接口。插件保存原始加密压缩结果并用于后续 Responses 请求，不把它伪装成文本摘要；失败或取消时保留原历史。含原生压缩结果的会话必须继续使用原应用、原模型和 Responses 协议，否则明确报错，需新建会话后切换。
+
+插件通过临时配置覆盖扩展使用 DSH 内置 BasicCompactionEngine 的 Agent preset，复用其压缩触发、锁、原子替换和保守的大小校验，不改写用户 preset 文件。自定义压缩引擎保持不变。已运行的 Agent 保留原 preset 代次；首次安装此能力后重启 DSH，使重新加载的会话使用新引擎。远程结果若未通过 DSH 的保守大小检查，不替换原历史。
+
+### Application protocols and native compaction (English)
+
+Choose a protocol in the Import dialog, or use **Edit** on an imported application. The selection applies to every model in that provider and keeps its application key and stable model ids. Existing imports remain on Chat Completions.
+
+Responses prefers WebSocket. Five total connection failures (including the first attempt), accumulated per live session/provider, switch it to SSE for the rest of that runtime session. Successful connections do not reset the budget. Authentication/protocol rejections, cancellation, and failures after a connection opens are not replayed as connection attempts. Auxiliary title generation uses SSE.
+
+Remote compaction is enabled by default for Responses and requires the application's `/v1/responses/compact` endpoint. Native encrypted output is durably retained and replayed without converting it into a text summary. Failed/cancelled compaction preserves prior history. A conversation containing native compacted context must stay on its original application/model and Responses protocol; start a new conversation to change routes.
+
+The plugin extends presets using DSH's BasicCompactionEngine through a temporary effective-config overlay, retaining its atomic history transaction and conservative shrink check. User preset files and custom compaction engines are unchanged. Restart DSH after first installing this feature because running agents retain their existing preset generation. Results that fail the conservative shrink check do not replace history.
+
 ### 启用 MCP 实例
 
 在实例详情「MCP」标签里打开开关。插件会：

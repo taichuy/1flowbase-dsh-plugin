@@ -9,7 +9,7 @@
  * the Playwright run against a real `dsh web` profile.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { FlowbasePanel } from '../src/client/panel.js'
 import type { ApplicationView, InstanceView, McpInstanceView } from '../src/shared/api.js'
 
@@ -96,12 +96,11 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', async () => {
   }
 })
 
-const { FlowbasePanel } = await import('../src/client/panel.js')
-
 interface Route {
   method?: string
   path: string
   reply: unknown
+  error?: string
 }
 
 function stubFetch(routes: readonly Route[]): string[] {
@@ -112,7 +111,7 @@ function stubFetch(routes: readonly Route[]): string[] {
     calls.push(`${method} ${path}`)
     const route = routes.find(entry => entry.path === path && (entry.method ?? 'GET') === method)
     if (route === undefined) throw new Error(`unexpected request ${method} ${path}`)
-    return { json: async () => ({ ok: true, data: route.reply }) } as unknown as Response
+    return { json: async () => (route.error === undefined ? { ok: true, data: route.reply } : { ok: false, error: { message: route.error } }) } as unknown as Response
   }))
   return calls
 }
@@ -136,6 +135,8 @@ function instanceFixture(): InstanceView {
         { id: 'gpt-5.6-sol', name: 'gpt-5.6-sol', contextWindow: 256_000, maxTokens: 16_384 },
       ],
       importedAt: 'then',
+      protocol: 'chat-completions',
+      remoteCompaction: true,
     }],
     mcps: [{ mcpInstanceId: 'mcp-1', name: 'Frontstage', serverName: 'frontstage_mcp-1', enabledAt: 'then' }],
   }
@@ -157,6 +158,8 @@ const APPLICATIONS: ApplicationView[] = [
         { id: 'gpt-5.6-sol', name: 'gpt-5.6-sol', contextWindow: 256_000, maxTokens: 16_384 },
       ],
       importedAt: 'then',
+      protocol: 'chat-completions',
+      remoteCompaction: true,
     },
   },
 ]
@@ -297,4 +300,82 @@ describe('1flowbase settings panel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
     expect(await screen.findByText(/1 MCP connection\(s\) need re-enabling/)).toBeTruthy()
   })
+
+  it('imports with the selected provider protocol and preserves compaction across protocol changes', async () => {
+    const saved = { ...instanceFixture().applications[0], applicationId: 'app-2', name: 'codex', protocol: 'responses', remoteCompaction: false }
+    const calls = stubFetch(pluginRoutes([
+      { method: 'POST', path: '/api/1flowbase/instances/i-1/apps/app-2', reply: saved },
+    ]))
+    await renderPanel()
+    await openDetail()
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }))
+    const dialog = within(screen.getByRole('dialog', { name: 'Import application "codex"' }))
+    const protocol = dialog.getByLabelText('Application protocol') as HTMLSelectElement
+    expect(protocol.value).toBe('chat-completions')
+    expect(calls.some(call => call.startsWith('POST'))).toBe(false)
+    fireEvent.change(protocol, { target: { value: 'responses' } })
+    const compaction = dialog.getByRole('checkbox') as HTMLInputElement
+    expect(compaction.checked).toBe(true)
+    expect(dialog.getByText(/5 total connection failures/)).toBeTruthy()
+    fireEvent.click(compaction)
+    fireEvent.change(protocol, { target: { value: 'anthropic-messages' } })
+    expect(dialog.queryByRole('checkbox')).toBeNull()
+    fireEvent.change(protocol, { target: { value: 'responses' } })
+    expect((dialog.getByRole('checkbox') as HTMLInputElement).checked).toBe(false)
+    fireEvent.click(dialog.getByRole('button', { name: 'Import' }))
+    await waitFor(() => { expect(screen.queryByRole('dialog')).toBeNull() })
+    const request = vi.mocked(fetch).mock.calls.find(call => call[0] === '/api/1flowbase/instances/i-1/apps/app-2')
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({ protocol: 'responses', remoteCompaction: false })
+    fireEvent.click(screen.getByRole('button', { name: 'Edit application codex' }))
+    expect((screen.getByLabelText('Application protocol') as HTMLSelectElement).value).toBe('responses')
+    expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('saves application settings and reopens the persisted values without importing again', async () => {
+    const saved = { ...instanceFixture().applications[0], protocol: 'responses', remoteCompaction: false }
+    const calls = stubFetch(pluginRoutes([
+      { method: 'POST', path: '/api/1flowbase/instances/i-1/apps/app-1/update', reply: saved },
+    ]))
+    await renderPanel()
+    await openDetail()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit application any' }))
+    fireEvent.change(screen.getByLabelText('Application protocol'), { target: { value: 'responses' } })
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => { expect(screen.queryByRole('dialog')).toBeNull() })
+    expect(calls.filter(call => call.startsWith('POST'))).toEqual(['POST /api/1flowbase/instances/i-1/apps/app-1/update'])
+    const request = vi.mocked(fetch).mock.calls.find(call => call[0] === '/api/1flowbase/instances/i-1/apps/app-1/update')
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({ protocol: 'responses', remoteCompaction: false })
+    fireEvent.click(screen.getByRole('button', { name: 'Edit application any' }))
+    expect((screen.getByLabelText('Application protocol') as HTMLSelectElement).value).toBe('responses')
+    expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('cancels application edits without requests or changing stored settings', async () => {
+    const calls = stubFetch(pluginRoutes())
+    await renderPanel()
+    await openDetail()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit application any' }))
+    fireEvent.change(screen.getByLabelText('Application protocol'), { target: { value: 'anthropic-messages' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(calls.some(call => call.startsWith('POST'))).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit application any' }))
+    expect((screen.getByLabelText('Application protocol') as HTMLSelectElement).value).toBe('chat-completions')
+  })
+
+  it('keeps the application draft and error visible when saving fails', async () => {
+    stubFetch(pluginRoutes([
+      { method: 'POST', path: '/api/1flowbase/instances/i-1/apps/app-1/update', reply: null, error: 'Protocol update failed' },
+    ]))
+    await renderPanel()
+    await openDetail()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit application any' }))
+    fireEvent.change(screen.getByLabelText('Application protocol'), { target: { value: 'responses' } })
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Save changes' }))
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Protocol update failed')
+    expect((screen.getByLabelText('Application protocol') as HTMLSelectElement).value).toBe('responses')
+    expect((within(screen.getByRole('dialog')).getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
 })

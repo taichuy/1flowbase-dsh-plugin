@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
+import { applicationSettings } from './application-settings.js'
 import { parseReasoning } from './reasoning.js'
 import { FlowbaseError } from './errors.js'
 import type {
@@ -61,6 +62,7 @@ function parseApplications(value: unknown): ImportedApplication[] {
     }
     const raw = entry as Record<string, unknown>
     return {
+      ...applicationSettings(raw),
       applicationId: text(raw.applicationId, 'applications.applicationId'),
       name: text(raw.name, 'applications.name'),
       description: text(raw.description, 'applications.description'),
@@ -85,6 +87,7 @@ function migrateLegacyModels(value: unknown): ImportedApplication[] {
     const raw = entry as Record<string, unknown>
     const wireModel = text(raw.wireModel, 'models.wireModel')
     return {
+      ...applicationSettings(raw),
       applicationId: text(raw.applicationId, 'models.applicationId'),
       name: text(raw.name, 'models.name'),
       description: text(raw.description, 'models.description'),

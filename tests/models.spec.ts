@@ -134,6 +134,23 @@ describe('provider ids', () => {
 })
 
 describe('ModelRegistry', () => {
+  it('edits protocol for every application model without changing its key or identity', async () => {
+    const { id, store, registry, registrations } = await fixture()
+    const imported = await registry.importApplication(id, 'app-1', { protocol: 'responses', remoteCompaction: true })
+    expect(imported).toMatchObject({ protocol: 'responses', remoteCompaction: true })
+    const before = store.require(id).applications[0]!
+    const provider = providerIdFor(id, 'app-1')
+    expect(registry.resolveRoute(provider, before.models[0]!.id)?.protocol).toBe('responses')
+    const edited = await registry.updateApplication(id, 'app-1', { protocol: 'anthropic-messages', remoteCompaction: false })
+    expect(edited).toMatchObject({ protocol: 'anthropic-messages', remoteCompaction: false })
+    expect(store.require(id).applications[0]).toMatchObject({ apiKey: before.apiKey, importedAt: before.importedAt, models: before.models })
+    expect(registry.resolveRoute(provider, before.models[0]!.id)?.protocol).toBe('anthropic-messages')
+    expect(registrations.at(-1)?.routes).toEqual([provider])
+    const reloaded = new StateStore(store.directory)
+    await reloaded.load()
+    expect(reloaded.require(id).applications[0]).toMatchObject({ protocol: 'anthropic-messages', remoteCompaction: false })
+  })
+
   it('imports an application as one provider carrying its whole catalogue', async () => {
     const { id, store, registry, upstream: flowbase, registrations } = await fixture()
     flowbase.setCatalogue('key-app-1', [

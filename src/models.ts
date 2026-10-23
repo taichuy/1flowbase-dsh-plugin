@@ -7,9 +7,12 @@ import { FlowbaseError } from './errors.js'
 import type { AdapterModel, AdapterSnapshot } from './adapter.js'
 import { parseReasoning } from './reasoning.js'
 import { FlowbaseLlmAdapter } from './adapter.js'
+import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
+import type { ResponsesTransportOptions } from './protocols/responses-transport.js'
 import type { StateStore } from './state.js'
 import type {
   ApplicationView,
+  ApplicationProtocolSettings,
   FlowbaseInstanceRecord,
   ImportedApplication,
   ImportedApplicationView,
@@ -58,6 +61,8 @@ function sameCatalogue(left: readonly WireModel[], right: readonly WireModel[]):
 
 function applicationView(application: ImportedApplication): ImportedApplicationView {
   return {
+    protocol: application.protocol,
+    remoteCompaction: application.remoteCompaction,
     applicationId: application.applicationId,
     name: application.name,
     description: application.description,
@@ -69,14 +74,17 @@ function applicationView(application: ImportedApplication): ImportedApplicationV
 /** Owns provider registration and the application-import workflow. */
 export class ModelRegistry {
   private handle: AdapterRegistrationHandle | undefined
-  private readonly adapter = new FlowbaseLlmAdapter(() => this.snapshot())
+  private readonly adapter: FlowbaseLlmAdapter
   private disposed = false
 
   constructor(
     private readonly ctx: Context,
     private readonly store: StateStore,
     private readonly timeoutMs: number,
-  ) {}
+    transportOptions?: ResponsesTransportOptions,
+  ) { this.adapter = new FlowbaseLlmAdapter(() => this.snapshot(), transportOptions) }
+
+  compact(options: GenerateOptions) { return this.adapter.compact(options) }
 
   /** Re-register the complete provider route set from durable state. */
   refresh(): void {
@@ -95,6 +103,7 @@ export class ModelRegistry {
   /** Release every route; the provider is unregistered from the model selector. */
   dispose(): void {
     this.disposed = true
+    this.adapter.dispose()
     this.handle?.()
     this.handle = undefined
   }
@@ -124,7 +133,7 @@ export class ModelRegistry {
   }
 
   /** Import one published agent-flow application as a DSH provider. */
-  async importApplication(instanceId: string, applicationId: string): Promise<ImportedApplicationView> {
+  async importApplication(instanceId: string, applicationId: string, settings: ApplicationProtocolSettings = { protocol: 'chat-completions', remoteCompaction: true }): Promise<ImportedApplicationView> {
     const instance = this.store.require(instanceId)
     const client = new FlowbaseClient({ baseUrl: instance.baseUrl, token: instance.token, timeoutMs: this.timeoutMs })
     const applications = await client.listApplications()
@@ -153,6 +162,7 @@ export class ModelRegistry {
       )
     }
     const record: ImportedApplication = {
+      ...settings,
       applicationId,
       name: application.name,
       description: application.description,
@@ -169,6 +179,25 @@ export class ModelRegistry {
     })
     this.refresh()
     return applicationView(record)
+  }
+
+  /** Update only provider request settings; keep the key, model ids and import identity. */
+  async updateApplication(instanceId: string, applicationId: string, settings: ApplicationProtocolSettings): Promise<ImportedApplicationView> {
+    const record = await this.store.update(draft => {
+      const instance = requireInDraft(draft.instances, instanceId)
+      const application = instance.applications.find(entry => entry.applicationId === applicationId)
+      if (application === undefined) throw new FlowbaseError('application/not-imported', 'Application is not imported')
+      Object.assign(application, settings)
+      instance.updatedAt = new Date().toISOString()
+      return application
+    })
+    this.refresh()
+    return applicationView(record)
+  }
+
+  /** Resolve one immutable route snapshot for compaction and request preparation. */
+  resolveRoute(provider: string, model: string): AdapterModel | undefined {
+    return this.snapshot().providers.get(provider)?.models.get(model)
   }
 
   /** Remove one imported application; its app key stays valid until revoked in 1flowbase. */
@@ -264,6 +293,8 @@ export class ModelRegistry {
             wireModel: model.id,
             contextWindow: model.contextWindow,
             maxTokens: model.maxTokens,
+            protocol: application.protocol,
+            remoteCompaction: application.remoteCompaction,
             ...(model.reasoning === undefined ? {} : { reasoning: model.reasoning }),
           })
         }

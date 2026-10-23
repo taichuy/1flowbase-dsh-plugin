@@ -16,7 +16,11 @@ import type {
 } from '@deepseek-ai/dsh-llm'
 import type { ImageAttachmentRef, ImageRequestTarget } from '@deepseek-ai/dsh-attachment'
 import { dshReasoning } from './reasoning.js'
-import type { ModelReasoning } from './shared/api.js'
+import type { ApplicationProtocol, ModelReasoning } from './shared/api.js'
+import { assertCompactRoute } from './protocols/compact-block.js'
+import { streamResponses, compactResponses } from './protocols/responses.js'
+import { streamAnthropic } from './protocols/anthropic.js'
+import { ResponsesTransport, type ResponsesTransportOptions } from './protocols/responses-transport.js'
 import { FlowbaseError } from './errors.js'
 
 /** One model of one imported application, as the adapter needs it for a request. */
@@ -33,6 +37,8 @@ export interface AdapterModel {
   wireModel: string
   contextWindow: number
   maxTokens: number
+  protocol?: ApplicationProtocol
+  remoteCompaction?: boolean
   reasoning?: ModelReasoning
 }
 
@@ -211,7 +217,18 @@ async function* sseData(body: ReadableStream<Uint8Array>): AsyncGenerator<string
 
 /** Streams one imported agent-flow application through its OpenAI-compatible endpoint. */
 export class FlowbaseLlmAdapter {
-  constructor(private readonly snapshot: () => AdapterSnapshot) {}
+  private readonly responses: ResponsesTransport
+  constructor(private readonly snapshot: () => AdapterSnapshot, transportOptions: ResponsesTransportOptions = {
+    connectTimeoutMs: 10_000, idleTimeoutMs: 300_000, retryDelayMs: 250,
+  }) { this.responses = new ResponsesTransport(transportOptions) }
+
+  dispose(): void { this.responses.dispose() }
+
+  compact(options: GenerateOptions) {
+    const entry = this.snapshot().providers.get(options.provider)?.models.get(options.model)
+    if (entry?.protocol !== 'responses' || entry.remoteCompaction !== true) throw new FlowbaseError('INVALID_REQUEST', 'Remote compaction requires an enabled Responses application')
+    return compactResponses(entry, options)
+  }
 
   providerRetryPolicy(_provider: string): ResolvedRetryPolicy | undefined {
     return undefined
@@ -226,9 +243,11 @@ export class FlowbaseLlmAdapter {
   }
 
   async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
+    const entry = this.snapshot().providers.get(provider)?.models.get(model)
+    if (entry === undefined) throw new FlowbaseError('model/not-found', `unknown imported model ${provider}/${model}`)
     return {
-      model: await this.resolveModel(provider, model),
-      stream: options => this.stream(options),
+      model: this.describeModel(entry),
+      stream: options => this.streamEntry(entry, options),
     }
   }
 
@@ -252,9 +271,13 @@ export class FlowbaseLlmAdapter {
   async resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
     const entry = this.snapshot().providers.get(provider)?.models.get(model)
     if (entry === undefined) throw new FlowbaseError('model/not-found', `unknown imported model ${provider}/${model}`)
+    return this.describeModel(entry)
+  }
+
+  private describeModel(entry: AdapterModel): LlmResolvedModelInfo {
     return {
-      provider,
-      id: model,
+      provider: entry.provider,
+      id: entry.wireModel,
       name: entry.name,
       description: entry.description,
       context: { contextWindow: entry.contextWindow },
@@ -266,6 +289,13 @@ export class FlowbaseLlmAdapter {
   async *stream(options: GenerateOptions): AsyncGenerator<StreamChunk> {
     const entry = this.snapshot().providers.get(options.provider)?.models.get(options.model)
     if (entry === undefined) throw new FlowbaseError('model/not-found', `unknown imported model ${options.provider}/${options.model}`)
+    yield* this.streamEntry(entry, options)
+  }
+
+  private async *streamEntry(entry: AdapterModel, options: GenerateOptions): AsyncGenerator<StreamChunk> {
+    assertCompactRoute(options, entry.protocol ?? 'chat-completions')
+    if (entry.protocol === 'responses') { yield* streamResponses(this.responses, entry, options); return }
+    if (entry.protocol === 'anthropic-messages') { yield* streamAnthropic(entry, options); return }
     const tools = toOpenAiTools(options.tools)
     let response: Response
     try {

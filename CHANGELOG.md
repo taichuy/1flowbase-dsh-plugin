@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Add application-wide import/edit selection for Chat Completions, Responses and Anthropic Messages.
+- Prefer Responses WebSocket with a five-total-connection-failure, session/provider-scoped SSE fallback.
+- Preserve native Responses compaction checkpoints through DSH history and reject incompatible route switches.
+- Reuse the host Anthropic implementation with reasoning-effort and thinking-signature replay.
+
 ## 0.4.0
 
 - Add native `@` references for enabled, mounted MCP instances, with disambiguation across 1flowbase connections and send-time validation.
