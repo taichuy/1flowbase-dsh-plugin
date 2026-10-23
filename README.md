@@ -117,6 +117,8 @@ dsh web
 | Responses | `/v1/responses` | WebSocket 优先，连接失败总计 5 次后 SSE |
 | Anthropic Messages | `/v1/messages` | HTTP / SSE |
 
+Anthropic 适配使用运行中 DSH 自带的 `@earendil-works/pi-ai`，当前兼容基线为 **1.3.0**。宿主必须提供公开的根导出 `normalizeContext` 和 `@earendil-works/pi-ai/api/anthropic-messages` 导出 `stream`；SDK 可能为 `/v1/messages` 添加 `beta=true` 查询参数。开发依赖的版本锁定不会替换或锁定宿主 SDK，升级 DSH 后需要重新验证这些 API 与 thinking signature 重放行为。若宿主缺少这些导出，请使用带兼容 SDK 的 DSH 版本；插件不会绕过 package exports 读取 SDK 私有模块。
+
 Responses 的失败预算按运行中的会话和供应商隔离，首次连接计入 5 次；成功连接不清除累计失败次数，降级后该会话/供应商保持 SSE，重启后重新尝试 WebSocket。鉴权或协议拒绝、取消、已经连接后的流中断不会被当成连接失败重放。后台标题生成使用 SSE，不消耗会话连接预算。
 
 Responses 默认开启远程压缩，使用 `/v1/responses/compact`。应用必须支持该接口。插件保存原始加密压缩结果并用于后续 Responses 请求，不把它伪装成文本摘要；失败或取消时保留原历史。含原生压缩结果的会话必须继续使用原应用、原模型和 Responses 协议，否则明确报错，需新建会话后切换。

@@ -264,11 +264,19 @@ export class ModelRegistry {
         const target = requireInDraft(draft.instances, instanceId)
         for (const application of changed) {
           const index = target.applications.findIndex(entry => entry.applicationId === application.applicationId)
-          if (index >= 0) target.applications[index] = application
+          if (index >= 0) target.applications[index] = { ...target.applications[index]!, models: application.models }
         }
         target.updatedAt = new Date().toISOString()
       })
       this.refresh()
+    }
+    // Protocol/key edits may finish while the remote catalogue is loading.
+    const current = this.store.require(instanceId)
+    for (const application of current.applications) {
+      if (effective.has(application.applicationId)) effective.set(application.applicationId, application)
+    }
+    for (const id of effective.keys()) {
+      if (!current.applications.some(application => application.applicationId === id)) effective.delete(id)
     }
     return effective
   }

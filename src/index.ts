@@ -2,7 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-llm'
 import { installRemoteCompaction } from './compaction/presets.js'
-import { assertCompactRoute } from './protocols/compact-block.js'
+import { guardForeignCompactRoute } from './protocols/route-guard.js'
 import { createHttpHandler } from './http.js'
 import { McpRegistry } from './mcp.js'
 import { ModelRegistry } from './models.js'
@@ -48,7 +48,10 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     compact: options => models.compact(options),
   })
   ctx.on('llm/stream', (options, next) => {
-    assertCompactRoute(options, models.resolveRoute(options.provider, options.model)?.protocol)
+    // Our adapter validates its captured route; reading live settings here would
+    // invalidate calls prepared before a protocol edit. Other adapters cannot
+    // consume our opaque checkpoints.
+    guardForeignCompactRoute(options, models.resolveRoute(options.provider, options.model) !== undefined)
     return next()
   })
   const mcps = new McpRegistry(ctx, store, timeoutMs)

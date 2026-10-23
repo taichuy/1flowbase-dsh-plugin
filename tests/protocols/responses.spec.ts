@@ -7,6 +7,8 @@ import { FlowbaseLlmAdapter, type AdapterModel } from '../../src/adapter.js'
 import { ResponsesTransport } from '../../src/protocols/responses-transport.js'
 import { streamResponses, compactResponses } from '../../src/protocols/responses.js'
 import { responsesChunks } from '../../src/protocols/responses-events.js'
+import { hostModule } from '../compaction/host.js'
+import { guardForeignCompactRoute } from '../../src/protocols/route-guard.js'
 import { responsesInput } from '../../src/protocols/responses-request.js'
 
 const cleanup: (() => Promise<void>)[] = []
@@ -27,12 +29,13 @@ async function fixture(mode: 'success' | 'network' | 'auth' | 'midstream' = 'suc
   let failUntil = mode === 'network' ? Infinity : 0
   let compactStatus = 200
   const compactOutput = [{ type: 'compaction', encrypted_content: 'opaque-server-payload', id: 'cmp' }]
+  let compactResponse: unknown = compactOutput
   const server = createServer(async (req, res) => {
     const bytes: Buffer[] = []; for await (const chunk of req) bytes.push(Buffer.from(chunk))
     const body = JSON.parse(Buffer.concat(bytes).toString())
     requests.push({ path: req.url!, body, authorization: req.headers.authorization })
     if (req.url === '/v1/responses/compact') {
-      res.writeHead(compactStatus, { 'content-type': 'application/json' }); res.end(JSON.stringify(compactStatus === 200 ? { output: compactOutput } : { error: { message: 'cannot compact' } })); return
+      res.writeHead(compactStatus, { 'content-type': 'application/json' }); res.end(JSON.stringify(compactStatus === 200 ? { output: compactResponse } : { error: { message: 'cannot compact' } })); return
     }
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     res.end(`data: ${JSON.stringify(done())}\n\n`)
@@ -56,6 +59,7 @@ async function fixture(mode: 'success' | 'network' | 'auth' | 'midstream' = 'suc
   const transport = new ResponsesTransport({ connectTimeoutMs: 250, idleTimeoutMs: 1000, retryDelayMs: 0 })
   cleanup.push(async () => { transport.dispose(); for (const socket of wss.clients) socket.terminate(); wss.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) })
   return { entry: route(`http://127.0.0.1:${address.port}`), transport, requests, compactOutput,
+    compactResponse: (output: unknown) => { compactResponse = output },
     upgrades: () => upgrades, failUntil: (n: number) => { failUntil = n }, compactStatus: (n: number) => { compactStatus = n } }
 }
 
@@ -133,19 +137,38 @@ describe('Responses transport and replay', () => {
     ] }] } as GenerateOptions
     expect(responsesInput(next)).toEqual(f.compactOutput)
     expect(() => responsesInput({ ...next, model: 'different' })).toThrow('original application/model')
+    f.compactResponse([...f.compactOutput, null])
+    await expect(compactResponses(f.entry, options())).rejects.toThrow('native encrypted compaction item')
     f.compactStatus(500)
     await expect(compactResponses(f.entry, options())).rejects.toThrow('cannot compact')
   })
-  it('freezes protocol settings and credentials in a prepared call', async () => {
+  it('keeps host prepared calls frozen while rejecting new incompatible checkpoint calls', async () => {
     const f = await fixture()
+    const { Context } = await hostModule('@deepseek-ai/cordis')
+    const { LlmRuntime } = await hostModule('@deepseek-ai/dsh-llm')
+    const ctx = new Context()
+    const llm = new LlmRuntime(ctx)
     let entry = f.entry
     const adapter = new FlowbaseLlmAdapter(() => ({ providers: new Map([['p', { name: 'App', models: new Map([['m', entry]]) }]]) }))
-    const prepared = await adapter.prepareCall('p', 'm')
-    entry = { ...entry, protocol: 'chat-completions', applicationKey: 'changed' }
+    llm.registerAdapter(['p'], adapter)
+    ctx.on('llm/stream', (request: GenerateOptions, next: () => unknown) => {
+      guardForeignCompactRoute(request, request.provider === 'p' && request.model === 'm')
+      return next()
+    })
+    const request = { ...options(), messages: [{ role: 'user', source: { kind: 'compact-checkpoint', compactionId: 'c' }, content: [{
+      type: 'flowbase-responses-compaction', version: 1, provider: 'p', model: 'm',
+      output: [{ type: 'compaction', encrypted_content: 'opaque' }],
+    }] }] } as GenerateOptions
     try {
-      await collect(prepared.stream(options()))
+      const prepared = await llm.prepareCall({ provider: 'p', model: 'm' })
+      entry = { ...entry, protocol: 'chat-completions', applicationKey: 'changed' }
+      await collect(prepared.stream({ ...prepared.config, ...request }))
       expect(f.requests[0]).toMatchObject({ path: 'WS', authorization: 'Bearer key' })
-    } finally { adapter.dispose() }
+      const changed = await llm.prepareCall({ provider: 'p', model: 'm' })
+      await expect(collect(changed.stream({ ...changed.config, ...request }))).rejects.toThrow('original application/model')
+      expect(() => guardForeignCompactRoute({ ...request, provider: 'other' }, false)).toThrow('original application/model')
+      expect(f.requests).toHaveLength(1)
+    } finally { adapter.dispose(); await ctx.fiber.dispose() }
   })
   it('converts tool-call pairs and native reasoning replay without losing encrypted content', () => {
     const native = [{ type: 'reasoning', encrypted_content: 'secret', summary: [] }, { type: 'function_call', call_id: 'c', name: 'lookup', arguments: '{}' }]

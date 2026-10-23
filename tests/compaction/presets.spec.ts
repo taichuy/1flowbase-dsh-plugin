@@ -49,7 +49,9 @@ describe('preset-local compaction overlay', () => {
         return presetModule
       }
     }
-    const loader = new FixtureLoader(ctx)
+    // Loader's own plugin fiber installs its supported lifecycle and isolation hooks.
+    await ctx.plugin(FixtureLoader).await()
+    const loader = ctx.loader as InstanceType<typeof FixtureLoader>
     const raw = config()
     await loader.root.update([{ id: 'fixture-preset', name: preset, config: raw }])
     await loader.await()

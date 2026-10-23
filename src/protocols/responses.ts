@@ -1,7 +1,7 @@
 import type { GenerateOptions, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { AdapterModel } from '../adapter.js'
-import type { ResponsesCompactBlock } from './compact-block.js'
-import { responsesBody, responsesInput, responsesUsage, objects } from './responses-request.js'
+import { validCompactOutput, type ResponsesCompactBlock } from './compact-block.js'
+import { responsesBody, responsesInput, responsesUsage } from './responses-request.js'
 import { responsesChunks } from './responses-events.js'
 import { ResponsesTransport, responseJson } from './responses-transport.js'
 
@@ -19,8 +19,8 @@ export async function compactResponses(entry: AdapterModel, options: GenerateOpt
       body: JSON.stringify({ model: entry.wireModel, input: responsesInput(options) }),
     })
     const result = await responseJson(response)
-    const output = objects(result.output)
-    if (!output.some(item => item.type === 'compaction' && typeof item.encrypted_content === 'string' && item.encrypted_content.length > 0)) {
+    const output = result.output
+    if (!validCompactOutput(output)) {
       throw new Error('Responses compaction did not return a native encrypted compaction item')
     }
     const usage = responsesUsage(result.usage)

@@ -1,31 +1,95 @@
-import { describe, expect, it } from 'vitest'
-import type { ResponsesCompactBlock } from '../../src/protocols/compact-block.js'
-import { assertCompactRoute } from '../../src/protocols/compact-block.js'
+import { createServer } from 'node:http'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, expect, it, vi } from 'vitest'
 import { hostModule } from './host.js'
+import { compactResponses } from '../../src/protocols/responses.js'
+import { responsesInput } from '../../src/protocols/responses-request.js'
+import type { AdapterModel } from '../../src/adapter.js'
+import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 
-describe('native compaction checkpoint persistence', () => {
-  it('restores native encrypted output inside an existing durable checkpoint event', async () => {
-    const { validateStoredEvents } = await hostModule('@deepseek-ai/dsh-session-persistence')
-    const { SESSION_FORMAT_VERSION } = await hostModule('@deepseek-ai/dsh-session')
+vi.mock('../../src/host-module.js', async () => {
+  const { hostModule } = await import('./host.js')
+  return { loadHostModule: hostModule }
+})
+
+describe('native compaction transaction and durable restore', () => {
+  it.each(['success', 'failure', 'cancel'] as const)('%s preserves a replayable session after disk restore', async mode => {
+    const { Context } = await hostModule('@deepseek-ai/cordis')
+    const { Session } = await hostModule('@deepseek-ai/dsh-session')
     const { createUserMessage } = await hostModule('@deepseek-ai/dsh-llm')
-    const { compactCheckpointSource } = await hostModule('@deepseek-ai/dsh-compaction')
-    const block: ResponsesCompactBlock = {
-      type: 'flowbase-responses-compaction', version: 1, provider: 'fixture', model: 'model',
-      output: [{ type: 'compaction', id: 'cmp_1', encrypted_content: 'opaque+/=\nuntouched' }],
+    const { TokenMeter } = await hostModule('@deepseek-ai/dsh-token-meter')
+    const { validateStoredEvents } = await hostModule('@deepseek-ai/dsh-session-persistence')
+    const { default: Engine } = await import('../../src/compaction.js')
+    const directory = await mkdtemp(join(tmpdir(), 'flowbase-compact-'))
+    const path = join(directory, 'session.json')
+    const ctx = new Context()
+    ctx.provide('sessionProjections', { register: () => () => {} })
+    new TokenMeter(ctx)
+    ctx.provide('sessions', {
+      // Real engine checkpoint with disk I/O; this does not claim JSONL-backend coverage.
+      flush: async (session: any) => writeFile(path, JSON.stringify({ header: session.header, events: session.snapshotEvents() })),
+    })
+    const controller = new AbortController()
+    const native = [{ type: 'compaction', encrypted_content: 'opaque+/=\noriginal', extension: { retained: true } }]
+    const upstream = createServer(async (request, response) => {
+      for await (const _chunk of request) { /* Consume the real compact request. */ }
+      if (mode === 'cancel') {
+        controller.abort(new Error('fixture cancelled compaction'))
+        response.end()
+        return
+      }
+      response.writeHead(mode === 'failure' ? 500 : 200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify(mode === 'failure' ? { error: 'upstream failed' } : { output: native }))
+    })
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve))
+    const address = upstream.address()
+    if (!address || typeof address === 'string') throw new Error('fixture did not bind')
+    const route = { baseUrl: `http://127.0.0.1:${address.port}`, applicationKey: 'fixture', wireModel: 'model' } as AdapterModel
+    ctx.provide('flowbaseProtocols', {
+      resolveRoute: () => ({ protocol: 'responses', remoteCompaction: true }),
+      compact: (options: GenerateOptions) => compactResponses(route, options),
+    })
+    // Installed host runtime exposes methods beyond the plugin's structural hook declaration.
+    const engine: any = new Engine(ctx, { auto: false })
+    const session = new Session(`fixture-${mode}`)
+    for (const text of ['original '.repeat(1000), 'retained tail']) {
+      session.append('user/message', createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }), { surfaceOp: 'append' })
     }
-    const message = createUserMessage({ content: [block], source: compactCheckpointSource('compaction-1') })
-    const persisted = JSON.stringify([
-      { seq: 0, time: 1, type: 'compaction/start', data: { compactionId: 'compaction-1', turn: null } },
-      { seq: 1, time: 2, type: 'user/message', data: message },
-      { seq: 2, time: 3, type: 'compaction/end', data: { compactionId: 'compaction-1', turn: null } },
-    ])
-    const restored = validateStoredEvents({ id: 'fixture', version: SESSION_FORMAT_VERSION, createdAt: 1, isSeeded: true }, JSON.parse(persisted))
-    const restoredBlock = restored[1].data.content[0]
-    expect(restoredBlock).toEqual(block)
-    expect(Object.isFrozen(restoredBlock)).toBe(true)
-    expect(JSON.stringify(restoredBlock.output)).toBe(JSON.stringify(block.output))
-    expect(() => assertCompactRoute({ provider: 'fixture', model: 'model', messages: [restored[1].data] }, 'responses')).not.toThrow()
-    expect(() => assertCompactRoute({ provider: 'other', model: 'model', messages: [restored[1].data] }, 'responses')).toThrow()
-    expect(() => assertCompactRoute({ provider: 'fixture', model: 'model', messages: [restored[1].data] }, 'chat-completions')).toThrow()
+    const originalNodes = [...session.surface.nodes]
+    const messagesOf = (owner: any) => owner.surface.nodes.map((seq: any) => owner.deriveEventMessage(owner.eventAt(seq))).filter(Boolean)
+    const originalInput = responsesInput({ provider: 'provider', model: 'model', messages: messagesOf(session) })
+    const agent = { session, options: { provider: 'provider', model: 'model' }, runMaintenance: (task: (signal: AbortSignal) => Promise<unknown>) => task(new AbortController().signal) }
+    try {
+      const transaction = engine.compactNow(agent, controller.signal)
+      if (mode === 'success') {
+        expect(await transaction).not.toBeNull()
+        expect(session.surface.nodes).not.toEqual(originalNodes)
+      } else {
+        await expect(transaction).rejects.toThrow()
+        expect(session.surface.nodes).toEqual(originalNodes)
+      }
+      const saved = JSON.parse(await readFile(path, 'utf8'))
+      const events = validateStoredEvents(saved.header, saved.events)
+      const restored = Session.fromRestore(session.id, events, saved.header, 0, 'validated')
+      const input = responsesInput({ provider: 'provider', model: 'model', messages: messagesOf(restored) })
+      expect(events.filter((event: any) => event.type === 'compaction/start')).toHaveLength(1)
+      expect(events.filter((event: any) => event.type === 'compaction/end')).toHaveLength(1)
+      if (mode === 'success') {
+        expect(input.filter(item => item.type === 'compaction')).toEqual(native)
+        expect(JSON.stringify(input)).not.toContain('compacted-summary')
+        expect(JSON.stringify(input)).not.toContain('original original')
+        expect(events.filter((event: any) => event.type === 'compaction/summary')).toHaveLength(1)
+      } else {
+        expect(input).toEqual(originalInput)
+        expect(events.filter((event: any) => event.type === 'compaction/summary')).toHaveLength(0)
+      }
+    } finally {
+      await ctx.fiber.dispose()
+      upstream.closeAllConnections()
+      await new Promise<void>((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()))
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 })

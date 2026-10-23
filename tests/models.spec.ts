@@ -30,6 +30,7 @@ interface Upstream {
   baseUrl: string
   setCatalogue(applicationKey: string, models: readonly CatalogueModel[]): void
   failCatalogues(value: boolean): void
+  pauseCatalogue(): { started: Promise<void>; release(): void }
 }
 
 function json(res: ServerResponse, payload: unknown): void {
@@ -43,12 +44,13 @@ async function upstream(): Promise<Upstream> {
     ['key-app-2', [{ id: 'claude-4-5', context_window: 128_000 }]],
   ])
   let fail = false
+  let pause: { start(): void; done: Promise<void> } | undefined
   const applications = [
     { id: 'app-1', application_type: 'agent_flow', name: '1flowbase', description: 'wrapped models' },
     { id: 'app-2', application_type: 'agent_flow', name: 'codex', description: '' },
     { id: 'app-3', application_type: 'chat', name: 'plain', description: 'not an agent flow' },
   ]
-  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const path = req.url ?? '/'
     if (path === '/api/console/applications') {
       json(res, { data: applications })
@@ -59,6 +61,7 @@ async function upstream(): Promise<Upstream> {
       return
     }
     if (path === '/v1/models') {
+      if (pause) { pause.start(); await pause.done; pause = undefined }
       if (fail) {
         res.writeHead(503, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ error: { message: 'catalogue unavailable' } }))
@@ -80,6 +83,14 @@ async function upstream(): Promise<Upstream> {
     baseUrl: `http://127.0.0.1:${String(address.port)}`,
     setCatalogue: (applicationKey, models) => { catalogues.set(applicationKey, models) },
     failCatalogues: value => { fail = value },
+    pauseCatalogue: () => {
+      let start!: () => void
+      let release!: () => void
+      const started = new Promise<void>(resolve => { start = resolve })
+      const done = new Promise<void>(resolve => { release = resolve })
+      pause = { start, done }
+      return { started, release }
+    },
   }
 }
 
@@ -134,6 +145,22 @@ describe('provider ids', () => {
 })
 
 describe('ModelRegistry', () => {
+  it('preserves saved settings when an older catalogue refresh completes', async () => {
+    const { id, store, registry, upstream } = await fixture()
+    try {
+      await registry.importApplication(id, 'app-1')
+      upstream.setCatalogue('key-app-1', [{ id: 'new-model' }])
+      const gate = upstream.pauseCatalogue()
+      const pending = registry.listApplications(id)
+      await gate.started
+      await registry.updateApplication(id, 'app-1', { protocol: 'anthropic-messages', remoteCompaction: false })
+      gate.release()
+      const views = await pending
+      expect(store.require(id).applications[0]).toMatchObject({ protocol: 'anthropic-messages', remoteCompaction: false, models: [{ id: 'new-model' }] })
+      expect(views.find(view => view.id === 'app-1')?.importedApplication).toMatchObject({ protocol: 'anthropic-messages', remoteCompaction: false })
+    } finally { registry.dispose() }
+  })
+
   it('edits protocol for every application model without changing its key or identity', async () => {
     const { id, store, registry, registrations } = await fixture()
     const imported = await registry.importApplication(id, 'app-1', { protocol: 'responses', remoteCompaction: true })

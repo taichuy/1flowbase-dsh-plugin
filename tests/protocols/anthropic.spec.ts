@@ -1,6 +1,11 @@
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { once } from 'node:events'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { AdapterModel } from '../../src/adapter.js'
@@ -87,7 +92,7 @@ describe('Anthropic host SDK bridge', () => {
         { role: 'user', content: [{ type: 'text', text: 'Hello' }] },
       ] as GenerateOptions['messages'],
     }))
-    expect(path).toBe('/v1/messages')
+    expect(new URL(path ?? '', url).pathname).toBe('/v1/messages')
     expect(key).toBe('app-test-key')
     expect(captured).toMatchObject({ model: 'claude-opus-4-6', stream: true, max_tokens: 2000,
       output_config: { effort: 'custom-deep' }, stop_sequences: ['DONE'] })
@@ -171,5 +176,64 @@ describe('Anthropic host SDK bridge', () => {
     await expect(collect(url, options({ messages: [{ role: 'user', content: [{ type: 'image', attachment: {} }] }] as GenerateOptions['messages'] })))
       .rejects.toThrow('text-only route cannot send image')
     expect(requests).toBe(0)
+  })
+})
+
+
+// These run in native Node, bypassing Vitest's module rewriting. An installed host
+// verifies its actual Pi import-only exports and Cordis identity; fixture hosts
+// make the resolver and execution-error regression portable to CI.
+const loaderPath = fileURLToPath(new URL('../../src/host-module.ts', import.meta.url))
+const installedHost = process.env.DSH_HOST_ENTRY ?? join(dirname(process.execPath), 'dsh')
+
+function nativeProbe(host: string, body: string): string {
+  return execFileSync(process.execPath, ['--input-type=module', '-e', `
+    import { pathToFileURL } from 'node:url';
+    import { createRequire } from 'node:module';
+    import { realpathSync } from 'node:fs';
+    const host = realpathSync(${JSON.stringify(host)});
+    process.argv[1] = host;
+    const { loadHostModule } = await import(pathToFileURL(${JSON.stringify(loaderPath)}).href);
+    ${body}
+  `], { encoding: 'utf8', timeout: 30_000 }).trim()
+}
+
+describe('native host module resolution', () => {
+  it.skipIf(!existsSync(installedHost))('loads actual host Pi public exports and keeps host Cordis identity', () => {
+    expect(nativeProbe(installedHost, `
+      const pi = await loadHostModule('@earendil-works/pi-ai');
+      const anthropic = await loadHostModule('@earendil-works/pi-ai/api/anthropic-messages');
+      const cordis = await loadHostModule('@deepseek-ai/cordis');
+      const expected = await import(pathToFileURL(createRequire(host).resolve('@deepseek-ai/cordis')).href);
+      if (typeof pi.normalizeContext !== 'function' || typeof anthropic.stream !== 'function') throw new Error('Unsupported host Pi API');
+      if (cordis.Context !== expected.Context) throw new Error('Cordis identity changed');
+      console.log('host APIs and identity verified');
+    `)).toBe('host APIs and identity verified')
+  })
+
+  it('resolves import-only roots and patterns without hiding module execution failures', () => {
+    const root = mkdtempSync(join(tmpdir(), 'flowbase-host-'))
+    try {
+      const host = join(root, 'host.mjs')
+      writeFileSync(host, '')
+      const pkg = join(root, 'node_modules', 'host-import-only')
+      mkdirSync(join(pkg, 'api'), { recursive: true })
+      writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name: 'host-import-only', type: 'module', exports: {
+        '.': { types: './index.d.ts', import: './index.js' },
+        './api/*': { import: './api/*.js' },
+      } }))
+      writeFileSync(join(pkg, 'index.js'), 'export const identity = "host";')
+      writeFileSync(join(pkg, 'api', 'good.js'), 'export const identity = "host-api";')
+      writeFileSync(join(pkg, 'api', 'broken.js'), 'throw Object.assign(new Error("execution-sentinel"), { code: "MODULE_NOT_FOUND" });')
+      expect(nativeProbe(host, `
+        const root = await loadHostModule('host-import-only');
+        const api = await loadHostModule('host-import-only/api/good');
+        if (root.identity !== 'host' || api.identity !== 'host-api') throw new Error('Wrong package copy');
+        let failure;
+        try { await loadHostModule('host-import-only/api/broken'); } catch (error) { failure = error; }
+        if (failure?.message !== 'execution-sentinel') throw new Error('Module execution failure was hidden');
+        console.log('import exports and failure propagation verified');
+      `)).toBe('import exports and failure propagation verified')
+    } finally { rmSync(root, { recursive: true, force: true }) }
   })
 })

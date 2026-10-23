@@ -109,6 +109,8 @@ describe('StateStore', () => {
       name: '1flowbase',
       description: 'wrapped models',
       apiKey: 'app-secret',
+      protocol: 'chat-completions',
+      remoteCompaction: true,
       models: [{ id: 'claude-opus-5-5', name: 'claude-opus-5-5', contextWindow: 256, maxTokens: 8192 }],
       importedAt: 'then',
     }])
