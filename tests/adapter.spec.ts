@@ -76,7 +76,7 @@ describe('FlowbaseLlmAdapter', () => {
     const adapter = new FlowbaseLlmAdapter(() => snapshot('http://127.0.0.1:1'))
     expect(adapter.providerInfo(PROVIDER)).toEqual({ id: PROVIDER, name: 'Support' })
     await expect(adapter.listModels(PROVIDER)).resolves.toEqual([
-      { provider: PROVIDER, id: 'inner-model', name: 'inner-model', description: 'Answers tickets' },
+      { provider: PROVIDER, id: 'inner-model', name: 'inner-model', description: 'Answers tickets', inputModalities: ['text'] },
     ])
     await expect(adapter.resolveModel(PROVIDER, 'inner-model')).resolves.toMatchObject({
       provider: PROVIDER,

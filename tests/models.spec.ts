@@ -194,8 +194,8 @@ describe('ModelRegistry', () => {
     const adapter = registrations.at(-1)?.adapter
     expect(adapter?.providerInfo(provider)).toEqual({ id: provider, name: '1flowbase' })
     await expect(adapter?.listModels(provider)).resolves.toEqual([
-      { provider, id: 'claude-opus-5-5', name: 'claude-opus-5-5', description: 'wrapped models' },
-      { provider, id: 'gpt-5.6-sol', name: 'gpt-5.6-sol', description: 'wrapped models' },
+      { provider, id: 'claude-opus-5-5', name: 'claude-opus-5-5', description: 'wrapped models', inputModalities: ['text'] },
+      { provider, id: 'gpt-5.6-sol', name: 'gpt-5.6-sol', description: 'wrapped models', inputModalities: ['text'] },
     ])
   })
 
