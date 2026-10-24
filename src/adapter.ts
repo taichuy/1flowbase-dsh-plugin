@@ -22,6 +22,7 @@ import { streamResponses, compactResponses } from './protocols/responses.js'
 import { streamAnthropic } from './protocols/anthropic.js'
 import { ResponsesTransport, type ResponsesTransportOptions } from './protocols/responses-transport.js'
 import { FlowbaseError } from './errors.js'
+import type { AttachmentResolver } from './protocols/responses-images.js'
 
 /** One model of one imported application, as the adapter needs it for a request. */
 export interface AdapterModel {
@@ -220,14 +221,14 @@ export class FlowbaseLlmAdapter {
   private readonly responses: ResponsesTransport
   constructor(private readonly snapshot: () => AdapterSnapshot, transportOptions: ResponsesTransportOptions = {
     connectTimeoutMs: 10_000, idleTimeoutMs: 300_000, retryDelayMs: 250,
-  }) { this.responses = new ResponsesTransport(transportOptions) }
+  }, private readonly attachments?: AttachmentResolver) { this.responses = new ResponsesTransport(transportOptions) }
 
   dispose(): void { this.responses.dispose() }
 
   compact(options: GenerateOptions) {
     const entry = this.snapshot().providers.get(options.provider)?.models.get(options.model)
     if (entry?.protocol !== 'responses' || entry.remoteCompaction !== true) throw new FlowbaseError('INVALID_REQUEST', 'Remote compaction requires an enabled Responses application')
-    return compactResponses(entry, options)
+    return compactResponses(entry, options, this.attachments)
   }
 
   providerRetryPolicy(_provider: string): ResolvedRetryPolicy | undefined {
@@ -264,6 +265,7 @@ export class FlowbaseLlmAdapter {
       id: model.wireModel,
       name: model.name,
       description: model.description,
+      inputModalities: this.modalities(model),
       ...dshReasoning(model.reasoning),
     })))
   }
@@ -274,6 +276,10 @@ export class FlowbaseLlmAdapter {
     return this.describeModel(entry)
   }
 
+  private modalities(entry: AdapterModel): readonly ('text' | 'image')[] {
+    return entry.protocol === 'responses' && this.attachments?.() !== undefined ? ['text', 'image'] : ['text']
+  }
+
   private describeModel(entry: AdapterModel): LlmResolvedModelInfo {
     return {
       provider: entry.provider,
@@ -282,6 +288,7 @@ export class FlowbaseLlmAdapter {
       description: entry.description,
       context: { contextWindow: entry.contextWindow },
       defaultMaxTokens: entry.maxTokens,
+      inputModalities: this.modalities(entry),
       ...dshReasoning(entry.reasoning),
     }
   }
@@ -294,7 +301,7 @@ export class FlowbaseLlmAdapter {
 
   private async *streamEntry(entry: AdapterModel, options: GenerateOptions): AsyncGenerator<StreamChunk> {
     assertCompactRoute(options, entry.protocol ?? 'chat-completions')
-    if (entry.protocol === 'responses') { yield* streamResponses(this.responses, entry, options); return }
+    if (entry.protocol === 'responses') { yield* streamResponses(this.responses, entry, options, this.attachments); return }
     if (entry.protocol === 'anthropic-messages') { yield* streamAnthropic(entry, options); return }
     const tools = toOpenAiTools(options.tools)
     let response: Response

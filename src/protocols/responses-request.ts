@@ -1,5 +1,6 @@
 import type { ContentBlock, GenerateOptions, ReplayEnvelope, TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { AdapterModel } from '../adapter.js'
+import { responseMetadata } from './metadata.js'
 import { assertCompactRoute, isCompactBlock } from './compact-block.js'
 
 export type JsonObject = Record<string, unknown>
@@ -20,7 +21,7 @@ function textContent(blocks: readonly ContentBlock[]): string {
 }
 
 /** Keep provider-native assistant output and compact checkpoints losslessly on their original route. */
-export function responsesInput(options: GenerateOptions): JsonObject[] {
+export function responsesInput(options: GenerateOptions, images: ReadonlyMap<string, string> = new Map()): JsonObject[] {
   assertCompactRoute(options, 'responses')
   const input: JsonObject[] = []
   if (options.system) input.push({ role: 'system', content: options.system })
@@ -32,7 +33,7 @@ export function responsesInput(options: GenerateOptions): JsonObject[] {
       continue
     }
     if (message.role === 'tool') {
-      input.push({ type: 'function_call_output', call_id: message.toolCallId, output: textContent(message.content) })
+      input.push({ type: 'function_call_output', call_id: message.toolCallId, output: message.content.some(block => block.type === 'image') ? imageContent(message.content, images) : textContent(message.content) })
       continue
     }
     if (message.role === 'assistant') {
@@ -52,14 +53,19 @@ export function responsesInput(options: GenerateOptions): JsonObject[] {
       }
       continue
     }
-    const text = textContent(message.content)
-    if (text) input.push({ role: message.role, content: text })
+    if (message.content.some(block => block.type === 'image')) {
+      if (message.role !== 'user') throw new Error('Responses images are supported only in user messages and tool results')
+      input.push({ role: message.role, content: imageContent(message.content, images) })
+    } else {
+      const text = textContent(message.content)
+      if (text) input.push({ role: message.role, content: text })
+    }
   }
   return input
 }
 
-export function responsesBody(entry: AdapterModel, options: GenerateOptions): JsonObject {
-  const body: JsonObject = { model: entry.wireModel, input: responsesInput(options), store: false, stream: true,
+export function responsesBody(entry: AdapterModel, options: GenerateOptions, images?: ReadonlyMap<string, string>): JsonObject {
+  const body: JsonObject = { model: entry.wireModel, input: responsesInput(options, images), ...responseMetadata(entry, options), store: false, stream: true,
     include: ['reasoning.encrypted_content'] }
   if (options.tools?.length) body.tools = options.tools.map(tool => ({
     type: 'function', name: tool.name, description: tool.description, parameters: tool.parameters, strict: false,
@@ -82,4 +88,17 @@ export function responsesUsage(raw: unknown): TokenUsage | undefined {
   return { inputTokens: Math.max(0, input - cached), outputTokens: output,
     totalTokens: typeof raw.total_tokens === 'number' ? raw.total_tokens : input + output,
     ...(cached ? { cacheReadTokens: cached } : {}), ...(reasoning === undefined ? {} : { reasoningTokens: reasoning }) }
+}
+
+/** Responses accepts multimodal user content and function-call output content items. */
+function imageContent(blocks: readonly ContentBlock[], images: ReadonlyMap<string, string>): JsonObject[] {
+  return blocks.flatMap(block => {
+    if (block.type === 'image') {
+      const image_url = images.get(block.attachment.attachmentId)
+      if (image_url === undefined) throw new Error('Responses image requires a resolved durable attachment')
+      return [{ type: 'input_image', image_url } as JsonObject]
+    }
+    const text = textContent([block])
+    return text ? [{ type: 'input_text', text } as JsonObject] : []
+  })
 }

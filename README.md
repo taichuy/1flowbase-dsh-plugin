@@ -125,6 +125,14 @@ Responses 默认开启远程压缩，使用 `/v1/responses/compact`。应用必�
 
 插件通过临时配置覆盖扩展使用 DSH 内置 BasicCompactionEngine 的 Agent preset，复用其压缩触发、锁、原子替换和保守的大小校验，不改写用户 preset 文件。自定义压缩引擎保持不变。已运行的 Agent 保留原 preset 代次；首次安装此能力后重启 DSH，使重新加载的会话使用新引擎。远程结果若未通过 DSH 的保守大小检查，不替换原历史。
 
+### 本地预览：Responses 传输优化
+
+`0.6.0-local.1` 是本地预览，不是 npm 发布版本。Responses 显式协商 `permessage-deflate`；上游未接受时发送普通 WebSocket 帧。同一会话和供应商可复用连接，只有请求配置不变且完整历史确实延续上一响应时，才用 `previous_response_id` 发送新增内容。压缩、历史改写、路由或凭据变更后不会沿用旧的增量基线。上游明确拒绝续接且尚未返回生成内容时，最多重发一次完整请求；流中断、鉴权错误和取消不会盲目重放。
+
+Responses 图片通过 DSH 的持久附件服务读取并转换为请求内的 data URL，不把 base64 写回会话。已卸载的图片继续使用宿主的文本占位。是否支持视觉取决于实际上游模型；插件的图片能力只表示协议适配已实现。Chat / Anthropic 的本次适配仍为文本入口。远程压缩使用相同的图片转换逻辑。
+
+请求标识使用真实的 `1flowbase-dsh-plugin` 客户端名，以及按会话、供应商、模型和端点隔离的不透明 `session_id` / `prompt_cache_key`；不模拟 Codex 身份或上传额外遥测。HTTP zstd 和 Codex 专用预热尚未启用。传输压缩率取决于内容，已压缩图片的收益不能用重复文本的压缩率估算。
+
 ### Application protocols and native compaction (English)
 
 Choose a protocol in the Import dialog, or use **Edit** on an imported application. The selection applies to every model in that provider and keeps its application key and stable model ids. Existing imports remain on Chat Completions.
@@ -134,6 +142,10 @@ Anthropic uses the running DSH host's `@earendil-works/pi-ai`; the tested compat
 Responses prefers WebSocket. Five total connection failures (including the first attempt), accumulated per live session/provider, switch it to SSE for the rest of that runtime session. Successful connections do not reset the budget. Authentication/protocol rejections, cancellation, and failures after a connection opens are not replayed as connection attempts. Auxiliary title generation uses SSE.
 
 Remote compaction is enabled by default for Responses and requires the application's `/v1/responses/compact` endpoint. Native encrypted output is durably retained and replayed without converting it into a text summary. Failed/cancelled compaction preserves prior history. A conversation containing native compacted context must stay on its original application/model and Responses protocol; start a new conversation to change routes.
+
+The local `0.6.0-local.1` preview explicitly negotiates WebSocket `permessage-deflate` and reuses connections. Incremental `previous_response_id` requests require unchanged request properties and an exact continuation of the previous input plus native output. Compaction, history rewrites, route or credential changes invalidate continuation. Explicit rejected continuations before generation may retry once with full history; authentication failures, cancellation and interrupted streams are not blindly replayed.
+
+Responses images are resolved through DSH's durable attachment service into request-local data URLs, including remote compaction. Base64 is never written back to session messages, and offloaded images retain the host's text projection. Actual vision support depends on the upstream model; Chat and Anthropic remain text-only in this integration. Requests identify this plugin honestly and use opaque scoped session/cache affinity. No Codex identity imitation, extra telemetry, HTTP zstd or Codex-specific prewarming is enabled. Compression savings depend on content and may be limited for already compressed images.
 
 The plugin extends presets using DSH's BasicCompactionEngine through a temporary effective-config overlay, retaining its atomic history transaction and conservative shrink check. User preset files and custom compaction engines are unchanged. Restart DSH after first installing this feature because running agents retain their existing preset generation. Results that fail the conservative shrink check do not replace history.
 
@@ -226,7 +238,7 @@ git push origin main --follow-tags
 
 ## 已知边界
 
-- 应用模型是文本接口：图片和文件会以占位文本发送，不会上传二进制。
+- Responses 支持通过宿主持久附件读取图片，实际视觉能力由上游模型决定。Chat / Anthropic 在本插件中仍为文本入口；普通文件只发送名称占位，不上传文件内容。
 - 应用是否支持工具调用取决于 1flowbase 的兼容映射；不支持时请求会自动退化为不带 tools 的调用。
 - 登录授权自动创建的用户 API Key 默认有效期 1 年，可在创建时选择 30 天、1 年、3 年或永久。
 - 模型 id 就是应用 `/v1/models` 里发布的 id（例如 `claude-opus-5-5`），不是应用 id；应用改名只改分组显示名，provider id 由实例 id + 应用 id 派生，因此不会漂移。

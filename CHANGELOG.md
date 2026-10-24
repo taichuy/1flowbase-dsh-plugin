@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0-local.1 (local preview)
+
+- Reuse Responses WebSocket connections and send safe incremental continuations, with full-history recovery for unsupported or expired continuations.
+- Resolve Responses image inputs through the host durable attachment service for generation and remote compaction.
+- Negotiate WebSocket compression explicitly and send honest client identity with opaque session/cache affinity.
+- This preview is installed locally and is not an npm release.
+
 ## 0.5.0
 
 - Add application-wide import/edit selection for Chat Completions, Responses and Anthropic Messages.

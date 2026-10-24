@@ -60,6 +60,12 @@ async function fixture(mode: 'success' | 'network' | 'auth' | 'midstream' = 'suc
   cleanup.push(async () => { transport.dispose(); for (const socket of wss.clients) socket.terminate(); wss.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) })
   return { entry: route(`http://127.0.0.1:${address.port}`), transport, requests, compactOutput,
     compactResponse: (output: unknown) => { compactResponse = output },
+    closeSockets: async () => {
+      const closed = [...wss.clients].map(socket => once(socket, 'close'))
+      for (const socket of wss.clients) socket.terminate()
+      await Promise.all(closed)
+      await new Promise(resolve => setTimeout(resolve, 10))
+    },
     upgrades: () => upgrades, failUntil: (n: number) => { failUntil = n }, compactStatus: (n: number) => { compactStatus = n } }
 }
 
@@ -105,11 +111,24 @@ describe('Responses transport and replay', () => {
     await collect(streamResponses(f.transport, { ...f.entry, provider: 'other' }, options('s', 'other')))
     expect(f.upgrades()).toBe(7)
   })
+  it('shares cumulative connection failures across concurrent calls without losing increments', async () => {
+    const f = await fixture('network')
+    await Promise.all(Array.from({ length: 3 }, () => collect(streamResponses(f.transport, f.entry, options()))))
+    // Up to two attempts may already be in flight when the fifth failure consumes the budget.
+    expect(f.upgrades()).toBeGreaterThanOrEqual(5)
+    expect(f.upgrades()).toBeLessThanOrEqual(7)
+    const attempts = f.upgrades()
+    expect(f.requests.filter(request => request.path === '/v1/responses')).toHaveLength(3)
+    await collect(streamResponses(f.transport, f.entry, options()))
+    expect(f.upgrades()).toBe(attempts)
+    expect(f.requests.filter(request => request.path === '/v1/responses')).toHaveLength(4)
+  })
   it('does not reset cumulative failures after a successful connection', async () => {
     const f = await fixture()
     f.failUntil(4)
     await collect(streamResponses(f.transport, f.entry, options()))
     expect(f.upgrades()).toBe(5)
+    await f.closeSockets()
     f.failUntil(Infinity)
     await collect(streamResponses(f.transport, f.entry, options()))
     expect(f.upgrades()).toBe(6)

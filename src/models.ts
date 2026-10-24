@@ -82,7 +82,7 @@ export class ModelRegistry {
     private readonly store: StateStore,
     private readonly timeoutMs: number,
     transportOptions?: ResponsesTransportOptions,
-  ) { this.adapter = new FlowbaseLlmAdapter(() => this.snapshot(), transportOptions) }
+  ) { this.adapter = new FlowbaseLlmAdapter(() => this.snapshot(), transportOptions, () => this.ctx.get('attachments')) }
 
   compact(options: GenerateOptions) { return this.adapter.compact(options) }
 
