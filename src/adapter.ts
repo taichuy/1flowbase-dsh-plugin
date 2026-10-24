@@ -1,3 +1,4 @@
+import { hostAttributionHeaders } from './attribution.js'
 import type {
   ContentBlock,
   FinishReason,
@@ -354,6 +355,7 @@ export class FlowbaseLlmAdapter {
     const init: RequestInit = {
       method: 'POST',
       headers: {
+        ...hostAttributionHeaders(),
         'content-type': 'application/json',
         accept: 'text/event-stream',
         authorization: `Bearer ${entry.applicationKey}`,

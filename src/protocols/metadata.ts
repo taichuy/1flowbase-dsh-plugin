@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { hostAttributionHeaders } from '../attribution.js'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import type { AdapterModel } from '../adapter.js'
 
@@ -14,7 +15,7 @@ export function responseHeaders(entry: AdapterModel, options: GenerateOptions): 
   const session = scope(entry, options)
   return {
     authorization: `Bearer ${entry.applicationKey}`,
-    'user-agent': '1flowbase-dsh-plugin',
+    ...hostAttributionHeaders(),
     'x-client-request-id': randomUUID(),
     ...(session === undefined ? {} : { session_id: session }),
   }

@@ -12,7 +12,7 @@ describe('Responses client identity and affinity', () => {
     expect(first.session_id).toMatch(/^[a-f0-9]{64}$/u)
     expect(second.session_id).toBe(first.session_id)
     expect(second['x-client-request-id']).not.toBe(first['x-client-request-id'])
-    expect(first['user-agent']).toBe('1flowbase-dsh-plugin')
+    expect(first['user-agent']).toMatch(/^deepseek-harness\/[^ ]+ \(.+; .+\)/u)
     expect(first.authorization).toBe('Bearer private-key')
     expect(responseMetadata(entry, options)).toEqual({ prompt_cache_key: first.session_id })
     expect(JSON.stringify(responseMetadata(entry, options))).not.toContain('private')

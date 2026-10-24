@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.0-local.2 (local preview)
+
+- Use the running DeepSeek Harness identity with actual OS/version and architecture for Chat, Responses (including compaction), and Anthropic requests.
+
 ## 0.6.0-local.1 (local preview)
 
 - Reuse Responses WebSocket connections and send safe incremental continuations, with full-history recovery for unsupported or expired continuations.

@@ -1,3 +1,4 @@
+import { hostAttributionHeaders } from '../attribution.js'
 import type { ContentBlock, GenerateOptions, ReplayEnvelope, StreamChunk, ToolSchema } from '@deepseek-ai/dsh-llm'
 import type { AssistantMessage, Context, JsonObject, Model, Tool, Usage } from '@earendil-works/pi-ai'
 import type * as Pi from '@earendil-works/pi-ai'
@@ -111,6 +112,7 @@ export async function* streamAnthropic(entry: AdapterModel, options: GenerateOpt
   if (options.signal !== undefined) signals.push(options.signal)
   const effort = options.reasoningEffort
   const stream = anthropic.stream(model, pi.normalizeContext(context), {
+    headers: hostAttributionHeaders(),
     apiKey: entry.applicationKey, signal: AbortSignal.any(signals), maxRetries: 0,
     maxTokens: options.maxTokens ?? entry.maxTokens,
     ...(options.temperature === undefined ? {} : { temperature: options.temperature }),
