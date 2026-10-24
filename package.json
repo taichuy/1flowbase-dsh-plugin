@@ -1,6 +1,6 @@
 {
   "name": "1flowbase-dsh-plugin",
-  "version": "0.6.0-local.2",
+  "version": "0.6.0",
   "description": "1flowbase instance manager and model/MCP bridge for the DeepSeek Harness Web profile",
   "keywords": [
     "deepseek-harness",
